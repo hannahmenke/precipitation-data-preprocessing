@@ -18,6 +18,7 @@ set "FORCE=false"
 set "PATTERN="
 set "GRAYSCALE=false"
 set "CHANNEL="
+set "IN_MEMORY=false"
 set "ENV_NAME=precipitation_data"
 
 REM Parse command line arguments
@@ -55,6 +56,11 @@ if "%~1"=="--channel" (
     shift
     goto parse_args
 )
+if "%~1"=="--in-memory" (
+    set "IN_MEMORY=true"
+    shift
+    goto parse_args
+)
 if "%~1"=="--help" (
     goto show_help
 )
@@ -75,12 +81,14 @@ echo   --force         Force reprocessing of existing files
 echo   --pattern FILE  Process only files matching pattern
 echo   --grayscale     Convert to grayscale TIFF
 echo   --channel N     Extract specific channel (0=Red, 1=Green, 2=Blue, 3=Alpha, 4=Alpha/Green fallback)
+echo   --in-memory     Use in-memory workflow (BMP to filtered TIFF, no intermediate files)
 echo   --help          Show this help message
 echo.
 echo %YELLOW%Examples:%NC%
 echo   autorun_preprocessing.bat
 echo   autorun_preprocessing.bat --skip-bmp
 echo   autorun_preprocessing.bat --grayscale --force
+echo   autorun_preprocessing.bat --in-memory
 echo   autorun_preprocessing.bat --channel 1 --pattern "sample"
 echo.
 exit /b 0
@@ -144,38 +152,61 @@ if not "%CHANNEL%"=="" (
     set "BMP_ARGS=!BMP_ARGS! --channel %CHANNEL%"
 )
 
-REM Step 1: BMP to TIFF conversion
-if "%SKIP_BMP%"=="false" (
+if "%IN_MEMORY%"=="true" (
     echo.
-    echo %BLUE%Step 1: Converting BMP files to TIFF...%NC%
-    echo %YELLOW%Command: python bmp_to_tiff_converter.py 3mM 6mM !BMP_ARGS!%NC%
+    echo %BLUE%Using in-memory workflow (BMP to filtered TIFF, no intermediate files)%NC%
+    
+    REM Build command for in-memory workflow
+    set "MEMORY_CMD=python bmp_to_filtered_workflow.py 3mM 6mM"
+    if "%FORCE%"=="true" set "MEMORY_CMD=!MEMORY_CMD! --force"
+    if not "%PATTERN%"=="" set "MEMORY_CMD=!MEMORY_CMD! --pattern %PATTERN%"
+    if "%GRAYSCALE%"=="true" set "MEMORY_CMD=!MEMORY_CMD! --grayscale"
+    if not "%CHANNEL%"=="" set "MEMORY_CMD=!MEMORY_CMD! --channel %CHANNEL%"
+    
+    echo %YELLOW%Command: !MEMORY_CMD!%NC%
     echo.
     
-    python bmp_to_tiff_converter.py 3mM 6mM !BMP_ARGS!
+    !MEMORY_CMD!
     if errorlevel 1 (
-        echo %RED%BMP to TIFF conversion failed%NC%
+        echo %RED%In-memory workflow failed%NC%
         exit /b 1
     )
-    echo %GREEN%BMP to TIFF conversion completed successfully%NC%
+    echo %GREEN%In-memory workflow completed successfully%NC%
 ) else (
-    echo %YELLOW%Skipping BMP to TIFF conversion (--skip-bmp specified)%NC%
-)
+    REM Traditional two-step workflow
+    REM Step 1: BMP to TIFF conversion
+    if "%SKIP_BMP%"=="false" (
+        echo.
+        echo %BLUE%Step 1: Converting BMP files to TIFF...%NC%
+        echo %YELLOW%Command: python bmp_to_tiff_converter.py 3mM 6mM !BMP_ARGS!%NC%
+        echo.
+        
+        python bmp_to_tiff_converter.py 3mM 6mM !BMP_ARGS!
+        if errorlevel 1 (
+            echo %RED%BMP to TIFF conversion failed%NC%
+            exit /b 1
+        )
+        echo %GREEN%BMP to TIFF conversion completed successfully%NC%
+    ) else (
+        echo %YELLOW%Skipping BMP to TIFF conversion (--skip-bmp specified)%NC%
+    )
 
-REM Step 2: Non-local means filtering
-if "%SKIP_FILTER%"=="false" (
-    echo.
-    echo %BLUE%Step 2: Applying non-local means filtering...%NC%
-    echo %YELLOW%Command: python nonlocal_means_filter.py 3mM 6mM !FILTER_ARGS!%NC%
-    echo.
-    
-    python nonlocal_means_filter.py 3mM 6mM !FILTER_ARGS!
-    if errorlevel 1 (
-        echo %RED%Non-local means filtering failed%NC%
-        exit /b 1
+    REM Step 2: Non-local means filtering
+    if "%SKIP_FILTER%"=="false" (
+        echo.
+        echo %BLUE%Step 2: Applying non-local means filtering...%NC%
+        echo %YELLOW%Command: python nonlocal_means_filter.py 3mM 6mM !FILTER_ARGS!%NC%
+        echo.
+        
+        python nonlocal_means_filter.py 3mM 6mM !FILTER_ARGS!
+        if errorlevel 1 (
+            echo %RED%Non-local means filtering failed%NC%
+            exit /b 1
+        )
+        echo %GREEN%Non-local means filtering completed successfully%NC%
+    ) else (
+        echo %YELLOW%Skipping non-local means filtering (--skip-filter specified)%NC%
     )
-    echo %GREEN%Non-local means filtering completed successfully%NC%
-) else (
-    echo %YELLOW%Skipping non-local means filtering (--skip-filter specified)%NC%
 )
 
 echo.

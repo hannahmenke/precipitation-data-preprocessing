@@ -156,6 +156,77 @@ def process_large_image_in_tiles(image: np.ndarray, tile_size: int = 2048, overl
     return filtered_image
 
 
+def apply_nonlocal_means_filter_to_image(image: Image.Image, h: float = 6, 
+                                        template_size: int = 3, search_size: int = 10,
+                                        tile_size: int = 2048) -> Optional[Image.Image]:
+    """
+    Apply non-local means filtering to a PIL Image object and return the filtered image.
+    
+    Args:
+        image: PIL Image object to filter
+        h: Filter strength parameter (higher = more smoothing)
+        template_size: Template window size in pixels
+        search_size: Search window size in pixels
+        tile_size: Tile size for large image processing
+        
+    Returns:
+        PIL Image object with filtering applied, or None if failed
+    """
+    try:
+        print(f"    Applying non-local means filter (h={h}, template={template_size}, search={search_size})")
+        print(f"    Image mode: {image.mode}, size: {image.size}")
+        
+        # Convert PIL Image to numpy array
+        if image.mode == 'RGBA':
+            # Handle alpha channel separately for RGBA images
+            img_array = np.array(image)
+            rgb_array = img_array[:, :, :3]
+            alpha_array = img_array[:, :, 3]
+            
+            # Apply filtering to RGB channels only
+            if rgb_array.shape[0] * rgb_array.shape[1] > tile_size * tile_size:
+                print(f"    Using tile-based processing for large image...")
+                filtered_rgb = process_large_image_in_tiles(
+                    rgb_array, tile_size, overlap=128, h=h, 
+                    template_window_size=template_size, search_window_size=search_size
+                )
+            else:
+                filtered_rgb = apply_nonlocal_means(
+                    rgb_array, h=h, template_window_size=template_size, 
+                    search_window_size=search_size
+                )
+            
+            # Combine filtered RGB with original alpha
+            filtered_array = np.dstack([filtered_rgb, alpha_array])
+            filtered_image = Image.fromarray(filtered_array, mode='RGBA')
+            
+        else:
+            # Handle other image modes
+            img_array = np.array(image)
+            
+            if img_array.shape[0] * img_array.shape[1] > tile_size * tile_size:
+                print(f"    Using tile-based processing for large image...")
+                filtered_array = process_large_image_in_tiles(
+                    img_array, tile_size, overlap=128, h=h, 
+                    template_window_size=template_size, search_window_size=search_size
+                )
+            else:
+                filtered_array = apply_nonlocal_means(
+                    img_array, h=h, template_window_size=template_size, 
+                    search_window_size=search_size
+                )
+            
+            # Convert back to PIL Image with original mode
+            filtered_image = Image.fromarray(filtered_array, mode=image.mode)
+        
+        print(f"    ✓ Filtering completed successfully")
+        return filtered_image
+        
+    except Exception as e:
+        print(f"    ✗ Error applying filter: {str(e)}")
+        return None
+
+
 def process_tiff_file(input_path: Path, output_path: Path, h: float = 6, 
                      template_window_size: int = 3, search_window_size: int = 10,
                      tile_size: int = 2048, use_tiling: bool = True) -> bool:

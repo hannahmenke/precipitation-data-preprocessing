@@ -8,6 +8,7 @@ param(
     [string]$Pattern = "",
     [switch]$Grayscale,
     [string]$Channel = "",
+    [switch]$InMemory,
     [switch]$Help
 )
 
@@ -38,12 +39,14 @@ if ($Help) {
     Write-Host "  -Pattern FILE   Process only files matching pattern"
     Write-Host "  -Grayscale      Convert to grayscale TIFF"
     Write-Host "  -Channel N      Extract specific channel (0=Red, 1=Green, 2=Blue, 3=Alpha, 4=Alpha/Green fallback)"
+    Write-Host "  -InMemory       Use in-memory workflow (BMP to filtered TIFF, no intermediate files)"
     Write-Host "  -Help           Show this help message"
     Write-Host ""
     Write-Warning "Examples:"
     Write-Host "  .\autorun_preprocessing.ps1"
     Write-Host "  .\autorun_preprocessing.ps1 -SkipBmp"
     Write-Host "  .\autorun_preprocessing.ps1 -Grayscale -Force"
+    Write-Host "  .\autorun_preprocessing.ps1 -InMemory"
     Write-Host "  .\autorun_preprocessing.ps1 -Channel 1 -Pattern `"sample`""
     Write-Host ""
     exit 0
@@ -137,42 +140,67 @@ if ($Channel) {
     $BmpArgs += "--channel", $Channel
 }
 
-# Step 1: BMP to TIFF conversion
-if (-not $SkipBmp) {
+if ($InMemory) {
     Write-Host ""
-    Write-Header "Step 1: Converting BMP files to TIFF..."
-    $cmd = "python bmp_to_tiff_converter.py 3mM 6mM " + ($BmpArgs -join " ")
+    Write-Header "Using in-memory workflow (BMP -> filtered TIFF, no intermediate files)"
+    
+    # Build command for in-memory workflow
+    $MemoryArgs = @("bmp_to_filtered_workflow.py", "3mM", "6mM")
+    
+    if ($Force) { $MemoryArgs += "--force" }
+    if ($Pattern) { $MemoryArgs += "--pattern", $Pattern }
+    if ($Grayscale) { $MemoryArgs += "--grayscale" }
+    if ($Channel) { $MemoryArgs += "--channel", $Channel }
+    
+    $cmd = "python " + ($MemoryArgs -join " ")
     Write-Warning "Command: $cmd"
     Write-Host ""
     
-    $args = @("bmp_to_tiff_converter.py", "3mM", "6mM") + $BmpArgs
-    & python $args
+    & python $MemoryArgs
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "BMP to TIFF conversion failed"
+        Write-Error "In-memory workflow failed"
         exit 1
     }
-    Write-Success "BMP to TIFF conversion completed successfully"
+    Write-Success "In-memory workflow completed successfully"
 } else {
-    Write-Warning "Skipping BMP to TIFF conversion (-SkipBmp specified)"
-}
+    # Traditional two-step workflow
+    # Step 1: BMP to TIFF conversion
+    if (-not $SkipBmp) {
+        Write-Host ""
+        Write-Header "Step 1: Converting BMP files to TIFF..."
+        $cmd = "python bmp_to_tiff_converter.py 3mM 6mM " + ($BmpArgs -join " ")
+        Write-Warning "Command: $cmd"
+        Write-Host ""
+        
+        $args = @("bmp_to_tiff_converter.py", "3mM", "6mM") + $BmpArgs
+        & python $args
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "BMP to TIFF conversion failed"
+            exit 1
+        }
+        Write-Success "BMP to TIFF conversion completed successfully"
+    } else {
+        Write-Warning "Skipping BMP to TIFF conversion (-SkipBmp specified)"
+    }
 
-# Step 2: Non-local means filtering
-if (-not $SkipFilter) {
-    Write-Host ""
-    Write-Header "Step 2: Applying non-local means filtering..."
-    $cmd = "python nonlocal_means_filter.py 3mM 6mM " + ($FilterArgs -join " ")
-    Write-Warning "Command: $cmd"
-    Write-Host ""
-    
-    $args = @("nonlocal_means_filter.py", "3mM", "6mM") + $FilterArgs
-    & python $args
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Non-local means filtering failed"
-        exit 1
+    # Step 2: Non-local means filtering
+    if (-not $SkipFilter) {
+        Write-Host ""
+        Write-Header "Step 2: Applying non-local means filtering..."
+        $cmd = "python nonlocal_means_filter.py 3mM 6mM " + ($FilterArgs -join " ")
+        Write-Warning "Command: $cmd"
+        Write-Host ""
+        
+        $args = @("nonlocal_means_filter.py", "3mM", "6mM") + $FilterArgs
+        & python $args
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Non-local means filtering failed"
+            exit 1
+        }
+        Write-Success "Non-local means filtering completed successfully"
+    } else {
+        Write-Warning "Skipping non-local means filtering (-SkipFilter specified)"
     }
-    Write-Success "Non-local means filtering completed successfully"
-} else {
-    Write-Warning "Skipping non-local means filtering (-SkipFilter specified)"
 }
 
 Write-Host ""

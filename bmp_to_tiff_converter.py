@@ -51,20 +51,23 @@ def get_tiff_filename(bmp_path: Path) -> Path:
     return bmp_path.with_suffix('.tiff')
 
 
-def convert_bmp_to_tiff(bmp_path: Path, tiff_path: Path, quality: int = 95, 
-                       convert_to_grayscale: bool = False, channel_extract: int = None) -> bool:
+def convert_bmp_to_tiff(bmp_path: Path, tiff_path: Path = None, quality: int = 95, 
+                       convert_to_grayscale: bool = False, channel_extract: int = None, 
+                       return_image: bool = False) -> bool or Image.Image:
     """
     Convert a .bmp file to .tiff format.
     
     Args:
         bmp_path: Path to input .bmp file
-        tiff_path: Path to output .tiff file
+        tiff_path: Path to output .tiff file (optional if return_image=True)
         quality: TIFF compression quality (1-100)
         convert_to_grayscale: Convert to grayscale using standard RGB weights
         channel_extract: Extract specific channel (0=R, 1=G, 2=B, 3=A, 4=custom)
+        return_image: If True, return PIL Image object instead of saving to disk
         
     Returns:
-        True if conversion successful, False otherwise
+        If return_image=True: PIL Image object if successful, None if failed
+        If return_image=False: True if conversion successful, False otherwise
     """
     try:
         conversion_type = ""
@@ -129,24 +132,29 @@ def convert_bmp_to_tiff(bmp_path: Path, tiff_path: Path, quality: int = 95,
                 else:
                     print(f"  Image already in grayscale mode ({img.mode})")
             
-            # Save as TIFF with LZW compression for better file size
-            # Use tile-based writing for large images to reduce memory usage
-            processed_img.save(tiff_path, format='TIFF', compression='lzw', 
-                              tiled=True, tile=(512, 512))
-        
-        # Check output file size
-        output_size_mb = tiff_path.stat().st_size / (1024 * 1024)
-        compression_ratio = (1 - output_size_mb / file_size_mb) * 100
-        print(f"✓ Successfully converted: {bmp_path.name}")
-        print(f"  Output size: {output_size_mb:.1f} MB (compressed {compression_ratio:.1f}%)")
-        return True
+            if return_image:
+                # Return the processed image in memory
+                print(f"✓ Successfully processed in memory: {bmp_path.name}")
+                return processed_img
+            else:
+                # Save as TIFF with LZW compression for better file size
+                # Use tile-based writing for large images to reduce memory usage
+                processed_img.save(tiff_path, format='TIFF', compression='lzw', 
+                                  tiled=True, tile=(512, 512))
+            
+                # Check output file size
+                output_size_mb = tiff_path.stat().st_size / (1024 * 1024)
+                compression_ratio = (1 - output_size_mb / file_size_mb) * 100
+                print(f"✓ Successfully converted: {bmp_path.name}")
+                print(f"  Output size: {output_size_mb:.1f} MB (compressed {compression_ratio:.1f}%)")
+                return True
         
     except MemoryError:
         print(f"✗ Memory error converting {bmp_path.name}: Image too large for available memory")
-        return False
+        return None if return_image else False
     except Exception as e:
         print(f"✗ Error converting {bmp_path.name}: {str(e)}")
-        return False
+        return None if return_image else False
 
 
 def should_convert(bmp_path: Path, tiff_path: Path, force: bool = False, 
@@ -216,6 +224,29 @@ def should_convert(bmp_path: Path, tiff_path: Path, force: bool = False,
         return True
 
 
+def process_bmp_in_memory(bmp_path: Path, convert_to_grayscale: bool = False, 
+                         channel_extract: int = None) -> Image.Image:
+    """
+    Process a BMP file in memory and return the PIL Image object.
+    This is a convenience function for in-memory workflows.
+    
+    Args:
+        bmp_path: Path to input .bmp file
+        convert_to_grayscale: Convert to grayscale using standard RGB weights
+        channel_extract: Extract specific channel (0=R, 1=G, 2=B, 3=A, 4=custom)
+        
+    Returns:
+        PIL Image object if successful, None if failed
+    """
+    return convert_bmp_to_tiff(
+        bmp_path=bmp_path,
+        tiff_path=None,
+        convert_to_grayscale=convert_to_grayscale,
+        channel_extract=channel_extract,
+        return_image=True
+    )
+
+
 def main():
     """Main function to handle command-line arguments and coordinate the conversion process."""
     parser = argparse.ArgumentParser(
@@ -271,6 +302,12 @@ Examples:
         help="Extract specific channel (0=Red, 1=Green, 2=Blue, 3=Alpha, 4=Alpha or Green fallback)"
     )
     
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Process images in memory only (for pipeline use - requires external filtering step)"
+    )
+    
     args = parser.parse_args()
     
     # Validate parameters
@@ -281,6 +318,10 @@ Examples:
     if args.channel is not None and args.grayscale:
         print("Warning: Both --channel and --grayscale specified. Channel extraction takes precedence.")
         args.grayscale = False
+    
+    if args.no_save:
+        print("Warning: --no-save specified. This option is for pipeline use and won't create output files.")
+        print("Use this option only when calling from other scripts that will handle the in-memory images.")
     
     # Find all .bmp files
     print(f"Searching for .bmp files in: {Path(args.directory).absolute()}")
@@ -313,11 +354,21 @@ Examples:
                 print(f"Would convert: {bmp_path.name} -> {tiff_path.name}{conversion_type}")
                 converted_count += 1
             else:
-                if convert_bmp_to_tiff(bmp_path, tiff_path, args.quality, 
-                                     args.grayscale, args.channel):
-                    converted_count += 1
+                if args.no_save:
+                    # Process in memory only - mainly for demonstration/testing
+                    result = convert_bmp_to_tiff(bmp_path, None, args.quality, 
+                                               args.grayscale, args.channel, return_image=True)
+                    if result is not None:
+                        print(f"✓ Processed in memory: {bmp_path.name} ({result.mode}, {result.size})")
+                        converted_count += 1
+                    else:
+                        error_count += 1
                 else:
-                    error_count += 1
+                    if convert_bmp_to_tiff(bmp_path, tiff_path, args.quality, 
+                                         args.grayscale, args.channel):
+                        converted_count += 1
+                    else:
+                        error_count += 1
         else:
             print(f"⏭ Skipping: {bmp_path.name} (already converted)")
             skipped_count += 1

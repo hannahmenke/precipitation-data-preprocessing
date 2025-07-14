@@ -217,6 +217,7 @@ usage() {
     echo "  --pattern PATTERN  Process only files matching pattern"
     echo "  --grayscale        Convert BMP files to grayscale TIFF"
     echo "  --channel N        Extract specific channel (0=R, 1=G, 2=B, 3=A, 4=A or G fallback)"
+    echo "  --in-memory        Use in-memory workflow (BMP -> filtered TIFF, no intermediate files)"
     echo "  --help, -h         Show this help message"
     echo ""
     echo "Examples:"
@@ -226,6 +227,7 @@ usage() {
     echo "  $0 --force                  # Reprocess all files"
     echo "  $0 --grayscale              # Convert BMP to grayscale TIFF"
     echo "  $0 --channel 4              # Extract channel 4 from BMP files"
+    echo "  $0 --in-memory              # Use memory-efficient workflow (no intermediate TIFFs)"
     echo "  $0 --grayscale --pattern '3mM'  # Grayscale conversion for 3mM files only"
 }
 
@@ -263,6 +265,10 @@ while [[ $# -gt 0 ]]; do
             CHANNEL_FLAG="--channel $2"
             shift 2
             ;;
+        --in-memory)
+            IN_MEMORY=true
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
@@ -293,31 +299,64 @@ main() {
     echo ""
     
     # Run processing steps
-    if [ "$SKIP_BMP" = false ]; then
-        run_bmp_conversion
-        echo ""
-    else
-        print_warning "Skipping BMP to TIFF conversion (--skip-bmp flag used)"
-        echo ""
-    fi
-    
-    if [ "$SKIP_FILTER" = false ]; then
-        # Add force and pattern flags if specified
-        if [ -n "$FORCE_FLAG" ] || [ -n "$PATTERN_FLAG" ]; then
-            print_status "Additional flags: ${FORCE_FLAG} ${PATTERN_FLAG}"
-            if python nonlocal_means_filter.py $FORCE_FLAG $PATTERN_FLAG; then
-                print_success "Non-local means filtering completed successfully"
-            else
-                print_error "Non-local means filtering failed"
-                exit 1
-            fi
+    if [ "$IN_MEMORY" = true ]; then
+        print_status "Using in-memory workflow (BMP -> filtered TIFF, no intermediate files)"
+        
+        # Build command for in-memory workflow
+        memory_cmd="python bmp_to_filtered_workflow.py 3mM 6mM"
+        
+        if [ -n "$FORCE_FLAG" ]; then
+            memory_cmd="$memory_cmd --force"
+        fi
+        
+        if [ -n "$PATTERN_FLAG" ]; then
+            memory_cmd="$memory_cmd $PATTERN_FLAG"
+        fi
+        
+        if [ -n "$GRAYSCALE_FLAG" ]; then
+            memory_cmd="$memory_cmd --grayscale"
+        fi
+        
+        if [ -n "$CHANNEL_FLAG" ]; then
+            memory_cmd="$memory_cmd $CHANNEL_FLAG"
+        fi
+        
+        print_status "Running: $memory_cmd"
+        if $memory_cmd; then
+            print_success "In-memory workflow completed successfully"
         else
-            run_nlm_filtering
+            print_error "In-memory workflow failed"
+            exit 1
         fi
         echo ""
     else
-        print_warning "Skipping non-local means filtering (--skip-filter flag used)"
-        echo ""
+        # Traditional two-step workflow
+        if [ "$SKIP_BMP" = false ]; then
+            run_bmp_conversion
+            echo ""
+        else
+            print_warning "Skipping BMP to TIFF conversion (--skip-bmp flag used)"
+            echo ""
+        fi
+        
+        if [ "$SKIP_FILTER" = false ]; then
+            # Add force and pattern flags if specified
+            if [ -n "$FORCE_FLAG" ] || [ -n "$PATTERN_FLAG" ]; then
+                print_status "Additional flags: ${FORCE_FLAG} ${PATTERN_FLAG}"
+                if python nonlocal_means_filter.py $FORCE_FLAG $PATTERN_FLAG; then
+                    print_success "Non-local means filtering completed successfully"
+                else
+                    print_error "Non-local means filtering failed"
+                    exit 1
+                fi
+            else
+                run_nlm_filtering
+            fi
+            echo ""
+        else
+            print_warning "Skipping non-local means filtering (--skip-filter flag used)"
+            echo ""
+        fi
     fi
     
     # Generate summary
