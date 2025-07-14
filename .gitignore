@@ -79,6 +79,10 @@ Pipfile.lock
 *.png
 *.gif
 
+# HDF5 data files
+*.h5
+*.hdf5
+
 # Log files
 *.log
 
