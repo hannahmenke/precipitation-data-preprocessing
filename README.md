@@ -2,9 +2,71 @@
 
 An automated pipeline for preprocessing precipitation imaging data from BMP files to filtered TIFF files using non-local means filtering with Avizo-matched parameters.
 
+## 🚀 Cross-Platform Support
+- ✅ **Windows**: Batch scripts (`.bat`) and PowerShell (`.ps1`)
+- ✅ **macOS/Linux**: Bash scripts (`.sh`)
+- ✅ **One-click setup** for all platforms
+
+## Prerequisites
+
+### Windows
+1. **Install Miniconda/Anaconda** (if not already installed):
+   - Download from: https://docs.conda.io/en/latest/miniconda.html
+   - During installation, check "Add Miniconda to PATH"
+   - Restart Command Prompt after installation
+
+2. **For PowerShell users** (recommended):
+   - Windows 10/11 includes PowerShell by default
+   - For conda integration, run: `conda init powershell`
+
+### macOS/Linux
+- **Conda/Miniconda**: Install from https://docs.conda.io/en/latest/miniconda.html
+- **Git**: Usually pre-installed
+
 ## Quick Start
 
-### 1. Run the Complete Pipeline
+### Windows Users
+
+#### 1. One-Click Setup
+```cmd
+setup_windows.bat
+```
+
+This will check for conda installation and set up the environment automatically.
+
+#### 2. Run the Complete Pipeline
+
+**Option A: Command Prompt**
+```cmd
+autorun_preprocessing.bat
+```
+
+**Option B: PowerShell (Recommended)**
+```powershell
+.\autorun_preprocessing.ps1
+```
+
+#### 3. Run with Options
+
+**Command Prompt:**
+```cmd
+autorun_preprocessing.bat --grayscale
+autorun_preprocessing.bat --pattern "6mM"
+autorun_preprocessing.bat --skip-bmp
+autorun_preprocessing.bat --help
+```
+
+**PowerShell:**
+```powershell
+.\autorun_preprocessing.ps1 -Grayscale
+.\autorun_preprocessing.ps1 -Pattern "6mM"
+.\autorun_preprocessing.ps1 -SkipBmp
+.\autorun_preprocessing.ps1 -Help
+```
+
+### macOS/Linux Users
+
+#### 1. Run the Complete Pipeline
 ```bash
 ./autorun_preprocessing.sh
 ```
@@ -15,7 +77,7 @@ This will:
 - Apply non-local means filtering with your Avizo settings
 - Generate a processing summary and log
 
-### 2. Run with Options
+#### 2. Run with Options
 ```bash
 # Process only 6mM files
 ./autorun_preprocessing.sh --pattern "6mM"
@@ -97,7 +159,10 @@ Precipitation_Data_test/
 │   └── *_nlm_filtered.tiff          # Filtered TIFF files
 ├── 6mM/
 │   └── ...
-├── autorun_preprocessing.sh          # Main pipeline script
+├── autorun_preprocessing.sh          # Main pipeline script (macOS/Linux)
+├── autorun_preprocessing.bat         # Main pipeline script (Windows CMD)
+├── autorun_preprocessing.ps1         # Main pipeline script (Windows PowerShell)
+├── setup_windows.bat                 # One-click Windows setup
 ├── bmp_to_tiff_converter.py         # BMP→TIFF converter
 ├── nonlocal_means_filter.py         # NLM filter
 ├── raw_vs_filtered_inspector.py     # Quality comparison
@@ -165,20 +230,44 @@ Examples:
 
 ## Troubleshooting
 
-### Environment Issues
+### Windows-Specific Issues
+
+#### Conda Not Found
+If you get "conda is not recognized":
+1. Install Miniconda from: https://docs.conda.io/en/latest/miniconda.html
+2. During installation, check "Add Miniconda to PATH"
+3. Restart Command Prompt/PowerShell
+4. Run `setup_windows.bat` again
+
+#### PowerShell Execution Policy
+If PowerShell blocks script execution:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+#### Conda Environment Activation Issues
+If conda activate fails in PowerShell:
+```powershell
+conda init powershell
+```
+Then restart PowerShell and try again.
+
+### General Issues
+
+#### Environment Issues
 If you encounter NumPy compatibility errors:
 ```bash
 conda activate precipitation_data
 conda install numpy=1.26 -y
 ```
 
-### Memory Issues
+#### Memory Issues
 For very large images, adjust tile size:
 ```bash
 python nonlocal_means_filter.py --tile-size 1024
 ```
 
-### Permission Issues
+#### Permission Issues (macOS/Linux)
 Make sure the autorun script is executable:
 ```bash
 chmod +x autorun_preprocessing.sh
