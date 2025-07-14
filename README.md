@@ -53,6 +53,8 @@ autorun_preprocessing.bat
 autorun_preprocessing.bat --grayscale
 autorun_preprocessing.bat --pattern "6mM"
 autorun_preprocessing.bat --skip-bmp
+autorun_preprocessing.bat --in-memory
+autorun_preprocessing.bat --in-memory --grayscale --force
 autorun_preprocessing.bat --help
 ```
 
@@ -61,6 +63,8 @@ autorun_preprocessing.bat --help
 .\autorun_preprocessing.ps1 -Grayscale
 .\autorun_preprocessing.ps1 -Pattern "6mM"
 .\autorun_preprocessing.ps1 -SkipBmp
+.\autorun_preprocessing.ps1 -InMemory
+.\autorun_preprocessing.ps1 -InMemory -Grayscale -Force
 .\autorun_preprocessing.ps1 -Help
 ```
 
@@ -94,6 +98,12 @@ This will:
 # Extract specific channel (channel 4 = alpha or green fallback)
 ./autorun_preprocessing.sh --channel 4
 
+# Use in-memory workflow (no intermediate TIFF files, saves 50% storage)
+./autorun_preprocessing.sh --in-memory
+
+# In-memory workflow with grayscale conversion
+./autorun_preprocessing.sh --in-memory --grayscale --force
+
 # Get help
 ./autorun_preprocessing.sh --help
 ```
@@ -116,7 +126,25 @@ This will:
 - Uses tile-based processing for large images
 - Maintains data type and dynamic range
 
-### 3. Quality Inspection Tools
+### 3. In-Memory Workflow (`bmp_to_filtered_workflow.py`)
+- **Single-step processing**: BMP → Filtered TIFF (no intermediate files)
+- **Storage efficient**: Saves ~50% disk space by eliminating intermediate TIFF files
+- **Memory optimized**: Uses tile-based processing for large scientific images
+- **Full feature support**: Grayscale conversion, channel extraction, pattern filtering
+- **Performance**: Processes 275MB images in ~3 seconds
+
+#### When to Use In-Memory Workflow
+- **Production environments** where storage is limited
+- **Large datasets** where intermediate files consume too much space
+- **Automated pipelines** where only final results are needed
+- **Fast processing** where minimizing I/O is important
+
+#### When to Use Traditional Workflow
+- **Quality inspection** where intermediate files help with debugging
+- **Development** where you want to examine conversion quality
+- **Archival purposes** where intermediate steps need preservation
+
+### 4. Quality Inspection Tools
 
 #### Compare Raw vs Filtered Images
 ```bash
@@ -165,6 +193,7 @@ Precipitation_Data_test/
 ├── setup_windows.bat                 # One-click Windows setup
 ├── bmp_to_tiff_converter.py         # BMP→TIFF converter
 ├── nonlocal_means_filter.py         # NLM filter
+├── bmp_to_filtered_workflow.py      # In-memory BMP→Filtered TIFF workflow
 ├── raw_vs_filtered_inspector.py     # Quality comparison
 ├── image_quality_inspector.py       # Format comparison
 ├── environment.yml                   # Conda environment
@@ -195,6 +224,11 @@ python nonlocal_means_filter.py --pattern "AfterFPN"
 # BMP to TIFF conversion options
 python bmp_to_tiff_converter.py --grayscale
 python bmp_to_tiff_converter.py --channel 4
+
+# In-memory workflow (no intermediate TIFF files)
+python bmp_to_filtered_workflow.py 3mM 6mM --grayscale
+python bmp_to_filtered_workflow.py --channel 4 --pattern "sample"
+python bmp_to_filtered_workflow.py --h 8.0 --force
 ```
 
 ## Output
@@ -208,8 +242,10 @@ Each run generates a timestamped log file with:
 
 ### File Naming Convention
 - Original: `dataset_file.bmp`
-- Converted: `dataset_file.tiff`
+- Converted: `dataset_file.tiff` (traditional workflow only)
 - Filtered: `dataset_file_nlm_filtered.tiff`
+
+**Note**: The in-memory workflow (`--in-memory`) skips creating intermediate `.tiff` files and goes directly from BMP to filtered TIFF, saving approximately 50% disk space.
 
 ### Smart Conversion Logic
 The BMP to TIFF converter intelligently handles existing files:
