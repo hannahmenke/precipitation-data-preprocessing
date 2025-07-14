@@ -77,7 +77,10 @@ def convert_bmp_to_tiff(bmp_path: Path, tiff_path: Path = None, quality: int = 9
         elif convert_to_grayscale:
             conversion_type = " (convert to grayscale)"
             
-        print(f"Converting: {bmp_path.name} -> {tiff_path.name}{conversion_type}")
+        if return_image:
+            print(f"Processing in memory: {bmp_path.name}{conversion_type}")
+        else:
+            print(f"Converting: {bmp_path.name} -> {tiff_path.name}{conversion_type}")
         
         # Get file size for progress indication
         file_size_mb = bmp_path.stat().st_size / (1024 * 1024)
@@ -134,8 +137,10 @@ def convert_bmp_to_tiff(bmp_path: Path, tiff_path: Path = None, quality: int = 9
             
             if return_image:
                 # Return the processed image in memory
+                # Make a copy to ensure the image data is not tied to the file handle
+                image_copy = processed_img.copy()
                 print(f"✓ Successfully processed in memory: {bmp_path.name}")
-                return processed_img
+                return image_copy
             else:
                 # Save as TIFF with LZW compression for better file size
                 # Use tile-based writing for large images to reduce memory usage

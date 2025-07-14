@@ -204,7 +204,10 @@ def apply_nonlocal_means_filter_to_image(image: Image.Image, h: float = 6,
             # Handle other image modes
             img_array = np.array(image)
             
-            if img_array.shape[0] * img_array.shape[1] > tile_size * tile_size:
+            # Calculate image size for tile decision
+            total_pixels = img_array.shape[0] * img_array.shape[1]
+            
+            if total_pixels > tile_size * tile_size:
                 print(f"    Using tile-based processing for large image...")
                 filtered_array = process_large_image_in_tiles(
                     img_array, tile_size, overlap=128, h=h, 

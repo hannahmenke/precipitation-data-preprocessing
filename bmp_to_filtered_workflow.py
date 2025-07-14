@@ -43,7 +43,9 @@ def process_bmp_to_filtered_tiff(bmp_path: Path, output_path: Path = None,
         
         # Generate output path if not provided
         if output_path is None:
-            output_path = bmp_path.with_suffix('_nlm_filtered.tiff')
+            # Create output filename: input_name_nlm_filtered.tiff
+            stem = bmp_path.stem  # filename without extension
+            output_path = bmp_path.parent / f"{stem}_nlm_filtered.tiff"
         
         conversion_type = ""
         if channel_extract is not None:
@@ -226,10 +228,17 @@ This workflow avoids creating intermediate TIFF files, saving disk space and I/O
     
     for bmp_path in all_bmp_files:
         # Generate output filename
-        output_path = bmp_path.with_suffix('_nlm_filtered.tiff')
+        stem = bmp_path.stem  # filename without extension
+        output_path = bmp_path.parent / f"{stem}_nlm_filtered.tiff"
         
-        # Check if we should process this file
+        # Check if we should process this file (check for final filtered output, not intermediate)
         should_process = args.force or not output_path.exists()
+        
+        if not should_process:
+            # Check if output is newer than input
+            if output_path.exists() and bmp_path.stat().st_mtime > output_path.stat().st_mtime:
+                should_process = True
+                print(f"ℹ {output_path.name} exists but is older than source .bmp file")
         
         if not should_process:
             print(f"⏭ Skipping: {bmp_path.name} (filtered file exists)")
