@@ -19,7 +19,7 @@ from bmp_to_tiff_converter import process_bmp_in_memory, find_bmp_files
 from nonlocal_means_filter import apply_nonlocal_means_filter_to_image
 
 def process_bmp_to_filtered_tiff(bmp_path: Path, output_path: Path = None,
-                                convert_to_grayscale: bool = False, 
+                                convert_to_grayscale: bool = True, 
                                 channel_extract: int = None,
                                 h: float = 6.0, template_size: int = 3, 
                                 search_size: int = 10) -> bool:
@@ -111,8 +111,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python bmp_to_filtered_workflow.py 3mM 6mM           # Process all BMPs in specified directories
-  python bmp_to_filtered_workflow.py --grayscale       # Convert to grayscale before filtering
+  python bmp_to_filtered_workflow.py 3mM 6mM           # Process all BMPs to grayscale filtered TIFF (default)
+  python bmp_to_filtered_workflow.py --color           # Keep images in color before filtering
   python bmp_to_filtered_workflow.py --channel 4       # Extract channel 4 then filter
   python bmp_to_filtered_workflow.py --h 8.0           # Use stronger filtering
   python bmp_to_filtered_workflow.py --pattern "6mM"   # Process only files matching pattern
@@ -142,9 +142,16 @@ This workflow avoids creating intermediate TIFF files, saving disk space and I/O
     )
     
     parser.add_argument(
+        "--color",
+        action="store_true",
+        help="Keep images in color (overrides default grayscale conversion)"
+    )
+    
+    parser.add_argument(
         "--grayscale", "-g",
         action="store_true",
-        help="Convert images to grayscale before filtering"
+        default=True,
+        help="Convert images to grayscale before filtering (default behavior)"
     )
     
     parser.add_argument(
@@ -183,6 +190,10 @@ This workflow avoids creating intermediate TIFF files, saving disk space and I/O
     )
     
     args = parser.parse_args()
+    
+    # Handle color override of default grayscale
+    if args.color:
+        args.grayscale = False
     
     # Validate parameters
     if args.h <= 0:

@@ -52,7 +52,7 @@ def get_tiff_filename(bmp_path: Path) -> Path:
 
 
 def convert_bmp_to_tiff(bmp_path: Path, tiff_path: Path = None, quality: int = 95, 
-                       convert_to_grayscale: bool = False, channel_extract: int = None, 
+                       convert_to_grayscale: bool = True, channel_extract: int = None, 
                        return_image: bool = False) -> bool or Image.Image:
     """
     Convert a .bmp file to .tiff format.
@@ -163,7 +163,7 @@ def convert_bmp_to_tiff(bmp_path: Path, tiff_path: Path = None, quality: int = 9
 
 
 def should_convert(bmp_path: Path, tiff_path: Path, force: bool = False, 
-                  convert_to_grayscale: bool = False, channel_extract: int = None) -> bool:
+                  convert_to_grayscale: bool = True, channel_extract: int = None) -> bool:
     """
     Determine if a .bmp file should be converted to .tiff.
     
@@ -229,7 +229,7 @@ def should_convert(bmp_path: Path, tiff_path: Path, force: bool = False,
         return True
 
 
-def process_bmp_in_memory(bmp_path: Path, convert_to_grayscale: bool = False, 
+def process_bmp_in_memory(bmp_path: Path, convert_to_grayscale: bool = True, 
                          channel_extract: int = None) -> Image.Image:
     """
     Process a BMP file in memory and return the PIL Image object.
@@ -259,12 +259,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python bmp_to_tiff_converter.py                    # Convert all .bmp files in current directory
+  python bmp_to_tiff_converter.py                    # Convert all .bmp files to grayscale TIFF (default)
+  python bmp_to_tiff_converter.py --color            # Keep images in color (overrides default grayscale)
   python bmp_to_tiff_converter.py --force            # Force conversion even if .tiff exists
   python bmp_to_tiff_converter.py --dry-run          # Show what would be converted without doing it
-  python bmp_to_tiff_converter.py --grayscale        # Convert to grayscale TIFF files
   python bmp_to_tiff_converter.py --channel 4        # Extract channel 4 (alpha or green fallback)
-  python bmp_to_tiff_converter.py -c 1 -g            # Extract green channel and convert to grayscale
+  python bmp_to_tiff_converter.py -c 1               # Extract green channel (implied grayscale)
         """
     )
     
@@ -295,9 +295,16 @@ Examples:
     )
     
     parser.add_argument(
+        "--color",
+        action="store_true",
+        help="Keep images in color (overrides default grayscale conversion)"
+    )
+    
+    parser.add_argument(
         "--grayscale", "-g",
         action="store_true",
-        help="Convert images to grayscale using standard RGB weights"
+        default=True,
+        help="Convert images to grayscale using standard RGB weights (default behavior)"
     )
     
     parser.add_argument(
@@ -314,6 +321,10 @@ Examples:
     )
     
     args = parser.parse_args()
+    
+    # Handle color override of default grayscale
+    if args.color:
+        args.grayscale = False
     
     # Validate parameters
     if not 1 <= args.quality <= 100:

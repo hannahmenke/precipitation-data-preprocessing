@@ -92,8 +92,8 @@ This will:
 # Force reprocessing of all files
 ./autorun_preprocessing.sh --force
 
-# Convert BMP files to grayscale TIFF
-./autorun_preprocessing.sh --grayscale
+# Keep BMP files in color (override default grayscale)
+./autorun_preprocessing.sh --color
 
 # Extract specific channel (channel 4 = alpha or green fallback)
 ./autorun_preprocessing.sh --channel 4
@@ -101,8 +101,8 @@ This will:
 # Use in-memory workflow (no intermediate TIFF files, saves 50% storage)
 ./autorun_preprocessing.sh --in-memory
 
-# In-memory workflow with grayscale conversion
-./autorun_preprocessing.sh --in-memory --grayscale --force
+# In-memory workflow with color images (override default grayscale)
+./autorun_preprocessing.sh --in-memory --color --force
 
 # Get help
 ./autorun_preprocessing.sh --help
@@ -114,7 +114,8 @@ This will:
 - Converts .bmp files to .tiff format with LZW compression
 - Handles large scientific images safely
 - Preserves original file structure
-- **Grayscale conversion** option for reducing file size
+- **Grayscale conversion by default** for optimal file size and processing
+- **Color preservation** option (--color) when needed
 - **Channel extraction** (R, G, B, Alpha, or custom channel 4)
 - **Smart reconversion**: Automatically detects if existing TIFF files match requested format
 
@@ -221,12 +222,12 @@ python nonlocal_means_filter.py --template-size 5 --search-size 8
 # Process specific patterns
 python nonlocal_means_filter.py --pattern "AfterFPN"
 
-# BMP to TIFF conversion options
-python bmp_to_tiff_converter.py --grayscale
-python bmp_to_tiff_converter.py --channel 4
+# BMP to TIFF conversion options (grayscale is now default)
+python bmp_to_tiff_converter.py --color          # Keep in color
+python bmp_to_tiff_converter.py --channel 4      # Extract specific channel
 
-# In-memory workflow (no intermediate TIFF files)
-python bmp_to_filtered_workflow.py 3mM 6mM --grayscale
+# In-memory workflow (no intermediate TIFF files, grayscale by default)
+python bmp_to_filtered_workflow.py 3mM 6mM --color     # Keep in color
 python bmp_to_filtered_workflow.py --channel 4 --pattern "sample"
 python bmp_to_filtered_workflow.py --h 8.0 --force
 ```
