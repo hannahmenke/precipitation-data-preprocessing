@@ -1,0 +1,11 @@
+name: precipitation_data
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy=1.26
+  - pillow
+  - matplotlib
+  - opencv
+  - pip 
