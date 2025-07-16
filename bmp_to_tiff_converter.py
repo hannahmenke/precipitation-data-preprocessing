@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from PIL import Image
 import argparse
-from typing import List, Tuple
+from typing import List, Tuple, Union, Optional
 
 # Configure PIL for large scientific images
 # Increase the pixel limit for legitimate large scientific data
@@ -53,7 +53,7 @@ def get_tiff_filename(bmp_path: Path) -> Path:
 
 def convert_bmp_to_tiff(bmp_path: Path, tiff_path: Path = None, quality: int = 95, 
                        convert_to_grayscale: bool = True, channel_extract: int = None, 
-                       return_image: bool = False) -> bool or Image.Image:
+                       return_image: bool = False) -> Union[bool, Image.Image, None]:
     """
     Convert a .bmp file to .tiff format.
     
@@ -230,7 +230,7 @@ def should_convert(bmp_path: Path, tiff_path: Path, force: bool = False,
 
 
 def process_bmp_in_memory(bmp_path: Path, convert_to_grayscale: bool = True, 
-                         channel_extract: int = None) -> Image.Image:
+                         channel_extract: int = None) -> Optional[Image.Image]:
     """
     Process a BMP file in memory and return the PIL Image object.
     This is a convenience function for in-memory workflows.
