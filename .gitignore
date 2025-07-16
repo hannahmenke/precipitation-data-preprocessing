@@ -106,3 +106,16 @@ processed/
 # But keep the directory structure
 !3mM/.gitkeep
 !6mM/.gitkeep 
+
+# Machine Learning data and models
+training_data/
+data_for_classification/
+models/
+*.xlsx
+*.csv
+*.pkl
+*.joblib
+
+# Keep example/template files if needed
+!*example*.xlsx
+!*template*.csv 
