@@ -23,7 +23,7 @@ def load_model_components(model_dir="models"):
         model_dir: Directory containing saved model components
         
     Returns:
-        Tuple of (model, scaler, label_encoder, feature_names, metadata)
+        Tuple of (model, scaler, label_encoder, feature_names, metadata, feature_selector)
     """
     model_path = Path(model_dir)
     
@@ -37,25 +37,27 @@ def load_model_components(model_dir="models"):
         label_encoder = joblib.load(model_path / "latest_label_encoder.joblib")
         feature_names = joblib.load(model_path / "latest_feature_names.joblib")
         metadata = joblib.load(model_path / "latest_metadata.joblib")
+        feature_selector = joblib.load(model_path / "latest_feature_selector.joblib")
         
         print(f"✓ Loaded model components from: {model_path}")
         print(f"✓ Model trained on: {metadata['timestamp']}")
         print(f"✓ Features used: {len(feature_names)}")
         print(f"✓ Classes: {metadata['classes']}")
         
-        return model, scaler, label_encoder, feature_names, metadata
+        return model, scaler, label_encoder, feature_names, metadata, feature_selector
         
     except FileNotFoundError as e:
         raise FileNotFoundError(f"Model components not found in '{model_dir}'. Please train a model first using excel_xgboost_classifier.py")
 
-def preprocess_prediction_data(df, feature_names, scaler):
+def preprocess_prediction_data(df, feature_names, scaler, feature_selector):
     """
     Preprocess new data for prediction using the same steps as training.
     
     Args:
         df: Input DataFrame with new data
-        feature_names: List of feature names from training
-        scaler: Fitted StandardScaler from training
+        feature_names: List of selected feature names (12 features)
+        scaler: Fitted StandardScaler from training (expects 17 features)
+        feature_selector: Fitted feature selector to reduce 17→12 features
         
     Returns:
         Preprocessed feature matrix
@@ -65,33 +67,48 @@ def preprocess_prediction_data(df, feature_names, scaler):
     print(f"{'='*60}")
     
     print(f"Input data shape: {df.shape}")
-    print(f"Required features: {feature_names}")
     
-    # Check if all required features are present
-    missing_features = [feat for feat in feature_names if feat not in df.columns]
+    # Apply same preprocessing as training script
+    # Handle the "Aera" typo by creating a standardized "Area" column if needed
+    if 'Aera' in df.columns and 'Area' not in df.columns:
+        df['Area'] = df['Aera']
+        print("ℹ️  Found 'Aera' column - standardized to 'Area' and excluded original")
+    
+    # Get all features that the scaler expects (17 features)
+    all_feature_names = scaler.feature_names_in_
+    print(f"Scaler expects {len(all_feature_names)} features: {list(all_feature_names)}")
+    print(f"After feature selection, model uses {len(feature_names)} features: {feature_names}")
+    
+    # Check if all required features for scaling are present
+    missing_features = [feat for feat in all_feature_names if feat not in df.columns]
     if missing_features:
-        raise ValueError(f"Missing required features: {missing_features}")
+        print(f"Available columns: {sorted(df.columns.tolist())}")
+        raise ValueError(f"Missing required features for scaling: {missing_features}")
     
-    # Extract required features
-    X = df[feature_names].copy()
+    # Extract all features needed for scaling (17 features)
+    X_all = df[all_feature_names].copy()
     
-    # Handle missing values (same as training)
+    # Handle missing values for all features (same as training)
     print(f"Missing values per feature:")
-    missing_counts = X.isnull().sum()
+    missing_counts = X_all.isnull().sum()
     for col, count in missing_counts.items():
         if count > 0:
             print(f"  {col}: {count} (filling with median)")
-            X[col].fillna(X[col].median(), inplace=True)
+            X_all[col].fillna(X_all[col].median(), inplace=True)
         else:
             print(f"  {col}: 0")
     
-    # Scale features using the trained scaler
-    X_scaled = scaler.transform(X)
-    X_scaled = pd.DataFrame(X_scaled, columns=feature_names, index=X.index)
+    # Scale all features using the trained scaler (17 features)
+    X_scaled_all = scaler.transform(X_all)
+    X_scaled_all = pd.DataFrame(X_scaled_all, columns=all_feature_names, index=X_all.index)
     
-    print(f"✓ Preprocessed data shape: {X_scaled.shape}")
+    # Apply feature selection to get the same features as training (12 features)
+    X_selected = feature_selector.transform(X_scaled_all)
+    X_final = pd.DataFrame(X_selected, columns=feature_names, index=X_all.index)
     
-    return X_scaled
+    print(f"✓ Scaled {len(all_feature_names)} features → Selected {len(feature_names)} features → Final shape: {X_final.shape}")
+    
+    return X_final
 
 def make_predictions(model, X, label_encoder):
     """
@@ -250,7 +267,7 @@ Examples:
     
     try:
         # Load model components
-        model, scaler, label_encoder, feature_names, metadata = load_model_components(args.model_dir)
+        model, scaler, label_encoder, feature_names, metadata, feature_selector = load_model_components(args.model_dir)
         
         # Load new data
         print(f"\nLoading data from: {data_path}")
@@ -258,7 +275,7 @@ Examples:
         print(f"✓ Loaded {len(df)} samples")
         
         # Preprocess data
-        X = preprocess_prediction_data(df, feature_names, scaler)
+        X = preprocess_prediction_data(df, feature_names, scaler, feature_selector)
         
         # Make predictions
         predictions, probabilities, confidence_scores = make_predictions(model, X, label_encoder)
