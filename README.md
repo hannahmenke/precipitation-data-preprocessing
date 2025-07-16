@@ -1,6 +1,6 @@
-# Precipitation Data Preprocessing Pipeline
+# Precipitation Data Analysis Pipeline
 
-An automated pipeline for preprocessing precipitation imaging data from BMP files to filtered TIFF files using non-local means filtering with Avizo-matched parameters.
+A comprehensive pipeline for preprocessing precipitation imaging data from BMP files to filtered TIFF files using non-local means filtering with Avizo-matched parameters, plus machine learning classification of precipitation particle types using XGBoost.
 
 ## 🚀 Cross-Platform Support
 - ✅ **Windows**: Batch scripts (`.bat`) and PowerShell (`.ps1`)
@@ -188,6 +188,15 @@ Precipitation_Data_test/
 │   └── *_nlm_filtered.tiff          # Filtered TIFF files
 ├── 6mM/
 │   └── ...
+├── training_data/                    # ML training data
+│   ├── 6mM-10-label-train.xlsx     # Enhanced labeled particle data (6mM)
+│   └── 3mM-4-label-train.xlsx      # Enhanced labeled particle data (3mM)
+├── models/                           # Saved trained models
+│   ├── latest_model.joblib          # Most recent XGBoost model
+│   ├── latest_scaler.joblib         # Feature scaler
+│   ├── latest_label_encoder.joblib  # Class label encoder
+│   ├── latest_feature_names.joblib  # Feature names
+│   └── latest_metadata.joblib       # Model metadata
 ├── autorun_preprocessing.sh          # Main pipeline script (macOS/Linux)
 ├── autorun_preprocessing.bat         # Main pipeline script (Windows CMD)
 ├── autorun_preprocessing.ps1         # Main pipeline script (Windows PowerShell)
@@ -195,9 +204,15 @@ Precipitation_Data_test/
 ├── bmp_to_tiff_converter.py         # BMP→TIFF converter
 ├── nonlocal_means_filter.py         # NLM filter
 ├── bmp_to_filtered_workflow.py      # In-memory BMP→Filtered TIFF workflow
+├── excel_xgboost_classifier.py      # XGBoost particle classifier
+├── excel_predictor.py               # Prediction script for new data
+├── run_classification_demo.py       # ML classification demo script
 ├── raw_vs_filtered_inspector.py     # Quality comparison
 ├── image_quality_inspector.py       # Format comparison
+├── images_to_hdf5.py                # Time series HDF5 converter
+├── inspect_hdf5.py                  # HDF5 file inspector
 ├── environment.yml                   # Conda environment
+├── requirements.txt                  # Python dependencies
 └── preprocessing_YYYYMMDD_HHMMSS.log # Processing logs
 ```
 
@@ -317,4 +332,224 @@ Processing times depend on image size and hardware:
 - **Medium images** (10-100 MB): ~1-5 minutes  
 - **Large images** (> 100 MB): ~5-30 minutes
 
-The pipeline uses tile-based processing to handle images larger than available memory. 
+The pipeline uses tile-based processing to handle images larger than available memory.
+
+## 🧠 Machine Learning Classification
+
+### XGBoost Precipitation Particle Classification
+
+The pipeline includes a machine learning component that uses XGBoost to classify precipitation particle types based on morphological and intensity features extracted from the processed images.
+
+#### Features
+- **Multi-class classification** of precipitation particle types (classes 1-4)
+- **Comprehensive feature engineering** from particle properties:
+  - **Shape descriptors**: Area, Major/Minor axes, Eccentricity, Circularity, ConvexArea, Extent, Perimeter, Major_Minor_ratio
+  - **Intensity statistics**: Gray_ave, Gray_var, MeanIntensity, Gray_skew, Gray_kur (skewness, kurtosis)
+  - **Distance measures**: dis, dis_normal
+  - **Smart exclusions**: Removes spatial coordinates, pixel-level data, and redundant features
+- **Hyperparameter tuning** with GridSearchCV for optimal performance
+- **Anti-overfitting measures** to ensure robust generalization:
+  - Automatic feature selection using ANOVA F-test (reduces features from 17→12 by default)
+  - Regularized hyperparameters (L1/L2 regularization, min samples per leaf)
+  - Conservative model architecture (fewer trees, shallower depth, lower learning rates)
+  - Aggressive subsampling for better generalization
+- **Automatic class balancing** with multiple resampling techniques:
+  - SMOTE oversampling (default)
+  - Random undersampling
+  - SMOTE + Edited Nearest Neighbours
+  - Class weight balancing
+- **Comprehensive evaluation** with confusion matrices and feature importance
+- **Visualization** of results with publication-ready plots
+- **Cross-validation** for robust model assessment using balanced accuracy
+- **Model persistence** - automatically saves trained models for future use
+- **Prediction pipeline** - easy-to-use script for classifying new data
+
+#### Quick Start
+
+```bash
+# Activate environment
+conda activate precipitation_data
+
+# Option 1: Run the demo script (recommended for first-time users)
+python run_classification_demo.py
+
+# Option 2: Run XGBoost classification directly (uses SMOTE balancing by default)
+python excel_xgboost_classifier.py --save-plots
+
+# Use different balancing methods
+python excel_xgboost_classifier.py --balance-method smote          # SMOTE oversampling (default)
+python excel_xgboost_classifier.py --balance-method class_weights  # Class weight balancing
+python excel_xgboost_classifier.py --balance-method undersampling  # Random undersampling
+python excel_xgboost_classifier.py --balance-method none           # No balancing
+
+# Control anti-overfitting features
+python excel_xgboost_classifier.py --max-features 15              # Keep more features (default: 12)
+python excel_xgboost_classifier.py --no-feature-selection         # Use all 17 features
+python excel_xgboost_classifier.py --max-features 8               # More aggressive feature reduction
+
+# Use custom Excel files
+python excel_xgboost_classifier.py --files data1.xlsx data2.xlsx
+
+# Customize training parameters
+python excel_xgboost_classifier.py --test-size 0.3 --target-column "particle_type"
+```
+
+#### Input Data Format
+
+The classifier expects Excel files with tabular data containing:
+- **Feature columns**: Numeric measurements (Area, Eccentricity, etc.)
+- **Target column**: Class labels for particle types (default: "type")
+- **Automatic handling** of missing values and feature scaling
+
+#### Output
+
+The script provides:
+- **Model performance metrics** (accuracy, precision, recall, F1-score)
+- **Feature importance ranking** showing which measurements are most predictive
+- **Confusion matrix** for detailed classification analysis
+- **Visualization plots** saved as high-resolution PNG files
+- **Cross-validation scores** for model reliability assessment
+
+#### Example Output
+
+```
+============================================================
+CLASSIFICATION COMPLETE!
+============================================================
+✓ Final Test Accuracy: 0.9234
+✓ Model successfully trained on 541 samples  
+✓ Used 15+ features including: ['Area', 'Major', 'Minor', 'Eccentricity', 'Circularity', 'ConvexArea', 'Extent', 'Perimeter', 'MeanIntensity', 'Gray_ave', 'Gray_var', 'Gray_skew', 'Gray_kur', 'dis', 'dis_normal', 'Major_Minor_ratio']
+✓ Class mapping: {1.0: 0, 2.0: 1, 3.0: 2, 4.0: 3}
+✓ Model components saved to: models/
+
+📋 To use this model for predictions:
+  python excel_predictor.py --data new_data.xlsx
+```
+
+#### Advanced Usage
+
+```bash
+# Custom hyperparameters and evaluation
+python excel_xgboost_classifier.py \
+    --files training_data/6mM-label.xlsx training_data/3mM-label.xlsx \
+    --target-column "type" \
+    --test-size 0.25 \
+    --random-seed 123 \
+    --save-plots
+
+# Help and options
+python excel_xgboost_classifier.py --help
+```
+
+#### Making Predictions on New Data
+
+Once you've trained a model, you can easily classify new, unlabeled data:
+
+```bash
+# Basic prediction on new Excel file
+python excel_predictor.py --data new_particles.xlsx
+
+# Custom output file and show more results
+python excel_predictor.py --data new_data.xlsx --output my_predictions.xlsx --show-top 20
+
+# Use a specific trained model
+python excel_predictor.py --data new_data.xlsx --model-dir custom_models/
+```
+
+**The prediction script will:**
+- Load your trained model automatically
+- Preprocess the new data using the same steps as training
+- Generate predictions with confidence scores
+- Create probability estimates for each class
+- Save results to an Excel file with detailed output
+- Display the most confident predictions
+
+**Output includes:**
+- Original data plus prediction columns
+- `predicted_class`: The predicted particle type
+- `confidence`: Prediction confidence (0-1 scale)
+- `prob_class_X`: Probability for each class
+- Data sorted by confidence (most confident first)
+
+#### Class Balancing Methods
+
+The classifier automatically handles class imbalance using several techniques:
+
+**SMOTE (Synthetic Minority Oversampling Technique)** - *Default*
+- Creates synthetic samples for minority classes
+- Preserves original data while adding balanced synthetic examples
+- Best for: Most cases, especially with continuous features
+- Pros: Maintains data patterns, no information loss
+- Cons: Slightly increases dataset size
+
+**Class Weights**
+- Assigns higher weights to minority classes during training
+- No data modification, just changes learning emphasis
+- Best for: When you want to keep original data unchanged
+- Pros: Fast, no synthetic data, maintains dataset size
+- Cons: May not work as well with severe imbalance
+
+**Random Undersampling**
+- Removes samples from majority classes to balance dataset
+- Reduces dataset size to match minority class
+- Best for: Large datasets where losing data is acceptable
+- Pros: Fast, reduces memory usage
+- Cons: Information loss, may hurt performance
+
+**SMOTE + Edited Nearest Neighbours (SMOTEENN)**
+- Combines SMOTE oversampling with cleaning techniques
+- Removes borderline/noisy samples after SMOTE
+- Best for: Noisy datasets with class overlap
+- Pros: High-quality balanced data
+- Cons: More processing time, may remove useful samples
+
+**None**
+- No balancing applied, uses original class distribution
+- Best for: Already balanced datasets or when imbalance is desired
+- Use this if: Your dataset is naturally balanced or represents true population
+
+#### Overfitting Prevention
+
+The classifier includes comprehensive anti-overfitting measures to ensure models generalize well to new data:
+
+**Automatic Feature Selection**
+- Uses ANOVA F-test to rank feature importance for classification
+- Reduces features from 17 to 12 by default (retains most informative features)
+- Removes redundant features like Gray_skew_abs, MeanIntensity, Minor axis
+- Command-line control: `--max-features N` or `--no-feature-selection`
+
+**Regularized Model Architecture**
+- Conservative hyperparameter ranges to prevent overfitting:
+  - Fewer trees: 50-150 estimators (vs 100-1000 in standard setups)
+  - Shallower depth: 2-4 levels (vs 3-10)
+  - Lower learning rates: 0.01-0.1 (vs 0.1-0.3)
+  - L1/L2 regularization: alpha=0-1, lambda=1-5
+  - Minimum samples per leaf: 1-5
+- Aggressive subsampling: 60-90% of samples and features per tree
+
+**Cross-Validation Strategy**
+- 5-fold stratified cross-validation maintains class balance in each fold
+- Balanced accuracy metric better handles class imbalance
+- Grid search explores 6,561 parameter combinations systematically
+
+**Early Stopping Protection**
+- Removes early stopping from GridSearchCV to prevent validation dataset conflicts
+- Relies on regularization parameters instead of training iteration limits
+- More stable hyperparameter tuning process
+
+### Data Requirements
+
+For machine learning classification, ensure your Excel files contain:
+1. **Consistent column names** across all files
+2. **Numeric feature columns** (no text except in identifier columns)
+3. **Complete target labels** (no missing values in classification column)
+4. **Sufficient samples** per class (minimum 10-20 samples recommended)
+
+### Integration with Image Processing
+
+The classification component is designed to work with particle measurement data extracted from the processed images:
+
+1. **Image Processing**: Use the main pipeline to convert and filter images
+2. **Feature Extraction**: Extract particle measurements using image analysis software
+3. **Data Export**: Save measurements to Excel format
+4. **Classification**: Run the XGBoost classifier to predict particle types 
