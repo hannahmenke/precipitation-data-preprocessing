@@ -28,6 +28,14 @@ import concurrent.futures
 from nonlocal_means_filter import apply_nonlocal_means
 from image_normalization import ImageNormalizer
 
+# Global variable for per-process ImageNormalizer
+normalizer_global = None
+
+def worker_initializer(reference_image_path):
+    global normalizer_global
+    from image_normalization import ImageNormalizer
+    normalizer_global = ImageNormalizer(reference_image_path)
+
 def parse_timestamp_from_filename(filename: str) -> datetime:
     import re
     timestamp_pattern = r'_(\d{17})_'
@@ -117,14 +125,14 @@ def create_hdf5_file(folder_path: Path, images, timestamps, filenames):
     return output_file
 
 def process_single_bmp(args):
-    bmp_path, reference_image_path, h, template_size, search_size = args
+    bmp_path, h, template_size, search_size = args
     try:
         from PIL import Image
         import numpy as np
         from nonlocal_means_filter import apply_nonlocal_means
-        from image_normalization import ImageNormalizer
         import re
         from datetime import datetime
+        global normalizer_global
         def parse_timestamp_from_filename(filename: str) -> datetime:
             timestamp_pattern = r'_(\d{17})_'
             match = re.search(timestamp_pattern, filename)
@@ -144,8 +152,7 @@ def process_single_bmp(args):
             img = img.convert('L')
             img_array = np.array(img)
         filtered = apply_nonlocal_means(img_array, h=h, template_window_size=template_size, search_window_size=search_size)
-        normalizer = ImageNormalizer(reference_image_path)
-        normalized = normalizer._peak_alignment(filtered)
+        normalized = normalizer_global._peak_alignment(filtered)
         timestamp = parse_timestamp_from_filename(bmp_path.name)
         return (normalized, timestamp, bmp_path.name, None)
     except Exception as e:
@@ -158,7 +165,7 @@ def process_folder(folder_path: Path, normalizer: ImageNormalizer, h=6.0, templa
         return False
     print(f"Found {len(bmp_files)} BMP(s) in {folder_path.name}")
 
-    args_list = [(bmp_path, normalizer.reference_image_path, h, template_size, search_size) for bmp_path in bmp_files]
+    args_list = [(bmp_path, h, template_size, search_size) for bmp_path in bmp_files]
     image_tuples = []
     errors = []
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -192,7 +199,7 @@ def main():
         print(f"Input root directory does not exist: {input_root}")
         sys.exit(1)
     # Initialize normalizer (just to get reference image path)
-    normalizer = ImageNormalizer(args.reference_image)
+    # normalizer = ImageNormalizer(args.reference_image) # This line is removed as per the edit hint
 
     # Gather all (bmp_path, folder_path) pairs
     bmp_folder_pairs = find_all_bmp_folder_pairs(input_root)
@@ -201,51 +208,43 @@ def main():
         sys.exit(0)
     print(f"Found {len(bmp_folder_pairs)} BMP(s) in total.")
 
-    # Prepare args for parallel processing
-    parallel_args = [(bmp_path, normalizer.reference_image_path, args.h, args.template_size, args.search_size) for bmp_path, _ in bmp_folder_pairs]
+    # Prepare args for parallel processing (no longer pass reference image path)
+    parallel_args = [(bmp_path, args.h, args.template_size, args.search_size) for bmp_path, _ in bmp_folder_pairs]
     folder_for_bmp = {str(bmp_path): folder for bmp_path, folder in bmp_folder_pairs}
 
-    # Process all BMPs in parallel with progress bar
-    results = []
+    # Count expected images per folder
+    from collections import defaultdict
+    expected_counts = defaultdict(int)
+    for bmp_path, folder in bmp_folder_pairs:
+        expected_counts[folder] += 1
+
+    # Process all BMPs in parallel with progress bar, writing HDF5 as soon as a folder is done
+    results_by_folder = defaultdict(list)
     errors = []
-    with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_workers) as executor:
+    completed_folders = set()
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_workers, initializer=worker_initializer, initargs=(args.reference_image,)) as executor:
+        from tqdm import tqdm
         with tqdm(total=len(parallel_args), desc="Processing BMPs", unit="image") as pbar:
             for res in executor.map(process_single_bmp, parallel_args):
                 normalized, timestamp, fname, err = res
-                if normalized is not None:
-                    results.append((normalized, timestamp, fname))
+                folder = folder_for_bmp.get(str(Path(fname).resolve()), None)
+                if normalized is not None and folder is not None:
+                    results_by_folder[folder].append((normalized, timestamp, fname))
+                    # If we've collected all expected images for this folder, write HDF5 now
+                    if len(results_by_folder[folder]) == expected_counts[folder]:
+                        try:
+                            images, timestamps, filenames = load_and_sort_images(results_by_folder[folder])
+                            create_hdf5_file(folder, images, timestamps, filenames)
+                        except Exception as e:
+                            print(f"✗ Error writing HDF5 for {folder}: {e}")
+                        completed_folders.add(folder)
+                        # Free memory
+                        del results_by_folder[folder]
                 elif err:
                     errors.append((fname, err))
                 pbar.update(1)
     for fname, err in errors:
         print(f"✗ Error processing {fname}: {err}")
-    if not results:
-        print("No images processed successfully.")
-        sys.exit(1)
-
-    # Group results by folder
-    from collections import defaultdict
-    folder_groups = defaultdict(list)
-    for normalized, timestamp, fname in results:
-        folder = folder_for_bmp.get(str(Path(fname).resolve()), None)
-        if folder is None:
-            # fallback: try just the name
-            for bmp_path, fldr in bmp_folder_pairs:
-                if bmp_path.name == fname:
-                    folder = fldr
-                    break
-        if folder is not None:
-            folder_groups[folder].append((normalized, timestamp, fname))
-
-    # Write HDF5 for each folder
-    for folder, image_tuples in folder_groups.items():
-        if not image_tuples:
-            continue
-        try:
-            images, timestamps, filenames = load_and_sort_images(image_tuples)
-            create_hdf5_file(folder, images, timestamps, filenames)
-        except Exception as e:
-            print(f"✗ Error writing HDF5 for {folder}: {e}")
 
 if __name__ == "__main__":
     main() 

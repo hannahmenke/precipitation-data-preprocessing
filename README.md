@@ -228,7 +228,7 @@ Compares conversion quality between formats.
 
 ### 6. BMP to Filtered+Normalized HDF5 Pipeline (`bmp_to_filtered_normalized_hdf5.py`)
 - **Purpose**: Recursively finds all BMP images in all folders under `/image`, applies non-local means filtering, then normalizes them using the 'peak_align' (peak shift) method with the default reference image, and saves the results as an HDF5 file per folder. No intermediate TIFFs are created.
-- **Parallel Processing:** All BMPs in all folders are processed in parallel, maximizing CPU usage. The script displays a live progress bar for the overall processing.
+- **Parallel Processing:** All BMPs in all folders are processed in parallel, maximizing CPU usage. The script displays a live progress bar for the overall processing. The reference image is loaded only once per worker process for efficiency, reducing I/O and memory usage (especially important for large reference images and datasets).
 - **Usage Example:**
 
 ```bash
