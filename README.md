@@ -145,7 +145,74 @@ This will:
 - **Development** where you want to examine conversion quality
 - **Archival purposes** where intermediate steps need preservation
 
-### 4. Quality Inspection Tools
+### 4. Image Normalization (`image_normalization.py`)
+- Normalizes images to match reference histogram characteristics
+- **Multiple normalization methods**:
+  - **`histogram_matching`**: Full histogram distribution matching (default)
+  - **`peak_align`**: Align histogram peaks only (preserves spread)
+  - **`peak_spread_align`**: Align both peaks and spread
+  - **`min_max`**: Min-max range normalization
+  - **`z_score`**: Mean and standard deviation matching
+- **Visual comparison plots** with overlay histograms showing:
+  - Peak positions and standard deviations
+  - Before/after image comparison
+  - Combined histogram view for easy comparison
+- **Batch processing** of entire directories
+- **Reference image selection** for consistent normalization across datasets
+
+#### Usage Examples
+
+```bash
+# Basic histogram matching normalization (default)
+python image_normalization.py
+
+# Peak alignment only (preserves original spread characteristics)
+python image_normalization.py --method peak_align
+
+# Align both peaks and spread for complete histogram control
+python image_normalization.py --method peak_spread_align
+
+# Custom input/output directories and reference image
+python image_normalization.py \
+    --input_dir raw_images \
+    --output_dir normalized_images \
+    --reference_image reference.tiff \
+    --method histogram_matching
+
+# Other normalization methods
+python image_normalization.py --method min_max      # Simple range scaling
+python image_normalization.py --method z_score      # Statistical normalization
+```
+
+#### When to Use Different Methods
+
+**Peak Alignment (`peak_align`)**
+- Best for: Correcting lighting differences while preserving image contrast
+- Preserves: Original histogram spread and shape
+- Changes: Only the brightness levels to align peaks
+- Use case: Batch processing where you want consistent brightness but natural contrast
+
+**Peak + Spread Alignment (`peak_spread_align`)**
+- Best for: Complete histogram standardization across all images
+- Preserves: Overall histogram shape 
+- Changes: Both brightness and contrast to match reference
+- Use case: Machine learning preprocessing where consistent intensity distributions are critical
+
+**Full Histogram Matching (`histogram_matching`)**
+- Best for: Exact visual matching to reference image characteristics
+- Preserves: Nothing (complete transformation)
+- Changes: Entire intensity distribution to precisely match reference
+- Use case: Visual processing where exact histogram replication is required
+
+#### Output
+
+The normalization process generates:
+- **Normalized images** with `normalized_` prefix
+- **Reference image copy** in output directory
+- **Histogram comparison plots** showing transformation effects
+- **Processing logs** with normalization statistics
+
+### 5. Quality Inspection Tools
 
 #### Compare Raw vs Filtered Images
 ```bash
@@ -207,6 +274,9 @@ Precipitation_Data_test/
 ├── excel_xgboost_classifier.py      # XGBoost particle classifier
 ├── excel_predictor.py               # Prediction script for new data
 ├── run_classification_demo.py       # ML classification demo script
+├── image_normalization.py           # Image histogram normalization
+├── images_for_normalisation/        # Input images for normalization
+├── normalized_images/               # Normalized output images
 ├── raw_vs_filtered_inspector.py     # Quality comparison
 ├── image_quality_inspector.py       # Format comparison
 ├── images_to_hdf5.py                # Time series HDF5 converter
