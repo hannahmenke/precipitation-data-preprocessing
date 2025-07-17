@@ -226,6 +226,27 @@ python image_quality_inspector.py
 ```
 Compares conversion quality between formats.
 
+### 6. BMP to Filtered+Normalized HDF5 Pipeline (`bmp_to_filtered_normalized_hdf5.py`)
+- **Purpose**: Recursively finds all BMP images in all folders under `/image`, applies non-local means filtering, then normalizes them using the 'peak_align' (peak shift) method with the default reference image, and saves the results as an HDF5 file per folder. No intermediate TIFFs are created.
+- **Parallel Processing:** All BMPs in all folders are processed in parallel, maximizing CPU usage. The script displays a live progress bar for the overall processing.
+- **Usage Example:**
+
+```bash
+python bmp_to_filtered_normalized_hdf5.py --input_root image \
+    --reference_image /path/to/reference.bmp \
+    --h 6.0 --template_size 3 --search_size 10 --max_workers 12
+```
+- **Options:**
+  - `--input_root`: Root directory containing subfolders of BMP images (default: `image`)
+  - `--reference_image`: Reference image for normalization (default: path to a BMP)
+  - `--h`: Non-local means filter strength (default: 6.0)
+  - `--template_size`: Template window size (default: 3)
+  - `--search_size`: Search window size (default: 10)
+  - `--max_workers`: Number of parallel workers (set to number of high-performance cores; default: all cores)
+- **Output:**
+  - For each folder, an HDF5 file named `<folder>_filtered_normalized_timeseries.h5` containing the filtered and normalized image stack, timestamps, and metadata.
+- **Performance Note:** The script is optimized for high-performance systems and can take advantage of many CPU cores and large RAM. Use `--max_workers` to control CPU usage and avoid overloading your system.
+
 ## Environment Setup
 
 The pipeline uses a conda environment with compatible package versions:
