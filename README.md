@@ -256,8 +256,9 @@ See the `streak_analysis_output/` directory for example output plots and statist
 ---
 
 ### 6. BMP to Filtered+Normalized HDF5 Pipeline (`bmp_to_filtered_normalized_hdf5.py`)
-- **Purpose**: Recursively finds all BMP images in all folders under `/image`, applies non-local means filtering, then normalizes them using the 'peak_align' (peak shift) method with the default reference image, and saves the results as an HDF5 file per folder. No intermediate TIFFs are created.
+- **Purpose**: Recursively finds all BMP images in all folders under a specified root directory (use `--root`), applies non-local means filtering, then normalizes them using the 'peak_align' (peak shift) method with the default reference image, and saves the results as an HDF5 file per folder. No intermediate TIFFs are created.
 - **Parallel Processing:** All BMPs in all folders are processed in parallel, maximizing CPU usage. The script displays a live progress bar for the overall processing. The reference image is loaded only once per worker process for efficiency, reducing I/O and memory usage (especially important for large reference images and datasets).
+- **Automatic Metadata Extraction:** Output HDF5 files now include `Na2CO3_mM`, `CaCl_mM`, and `replicate` attributes if these can be parsed from the folder name (e.g., `2`5+100mM-0628-5-mix` → `Na2CO3_mM=2.5`, `CaCl_mM=100`, `replicate=5`).
 - **Usage Example:**
 
 ```bash

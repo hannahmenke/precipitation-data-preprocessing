@@ -364,8 +364,9 @@ main() {
     
     print_success "=== PIPELINE COMPLETED SUCCESSFULLY ==="
     print_status "Next steps:"
-    print_status "  - Use raw_vs_filtered_inspector.py to compare results"
-    print_status "  - Use image_quality_inspector.py to compare BMP vs TIFF quality"
+    print_status "  - Output HDF5 files now include Na2CO3, CaCl, and replicate attributes if parsed from folder name."
+    print_status "  - Use analyze_timeseries.py or investigate_streaks.py for quality checks"
+    print_status "  - Use image_quality_inspector.py to compare BMP vs TIFF quality (if needed)"
 }
 
 # Trap to ensure we always generate a summary, even on failure

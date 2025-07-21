@@ -120,3 +120,13 @@ models/
 # Keep example/template files if needed
 !*example*.xlsx
 !*template*.csv 
+
+# Ignore large files to avoid GitHub's 100MB file size limit
+*.jc
+*.h5
+*.bmp
+*.tiff
+*.tif
+*.png
+*.jpg
+*.jpeg 

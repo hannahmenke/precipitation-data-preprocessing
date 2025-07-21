@@ -204,15 +204,11 @@ if ($InMemory) {
 }
 
 Write-Host ""
-Write-Success "========================================"
-Write-Success "  Processing completed successfully!"
-Write-Success "========================================"
-Write-Host ""
-Write-Warning "Summary:"
-if (-not $SkipBmp) { Write-Host "- BMP to TIFF conversion: " -NoNewline; Write-Success "COMPLETED" }
-if ($SkipBmp) { Write-Host "- BMP to TIFF conversion: " -NoNewline; Write-Warning "SKIPPED" }
-if (-not $SkipFilter) { Write-Host "- Non-local means filtering: " -NoNewline; Write-Success "COMPLETED" }
-if ($SkipFilter) { Write-Host "- Non-local means filtering: " -NoNewline; Write-Warning "SKIPPED" }
+Write-Success "=== PIPELINE COMPLETED SUCCESSFULLY ==="
+Write-Host "Next steps:" -ForegroundColor Cyan
+Write-Host "  - Output HDF5 files now include Na2CO3, CaCl, and replicate attributes if parsed from folder name." -ForegroundColor Cyan
+Write-Host "  - Use analyze_timeseries.py or investigate_streaks.py for quality checks" -ForegroundColor Cyan
+Write-Host "  - Use image_quality_inspector.py to compare BMP vs TIFF quality (if needed)" -ForegroundColor Cyan
 Write-Host ""
 Write-Header "Next steps:"
 Write-Host "- Use image_quality_inspector.py to compare BMP vs TIFF quality"

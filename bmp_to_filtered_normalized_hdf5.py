@@ -7,11 +7,16 @@ applies non-local means filtering, then normalizes them using the 'peak_align' m
 with the default reference image, and saves the results as an HDF5 file per subfolder.
 No intermediate TIFFs are created.
 
-Usage:
-    python bmp_to_filtered_normalized_hdf5.py --input_root image \
-        --reference_image 3mM-0628-4-mix_20250628213544658_17_o.tiff \
-        --h 6.0 --template_size 3 --search_size 10
+The output HDF5 file will include Na2CO3, CaCl, and replicate attributes if these can be parsed from the folder name (e.g., 2`5+100mM-0628-5-mix → Na2CO3_mM=2.5, CaCl_mM=100, replicate=5).
 
+You can limit processing by maximum number of images per folder (--max_images) and/or maximum time window from the earliest image (--max_time_seconds).
+
+You can specify the root directory to search for BMP images using --root (recommended), or --input_root (deprecated).
+
+Usage:
+    python bmp_to_filtered_normalized_hdf5.py --root image \
+        --reference_image 3mM-0628-4-mix_20250628213544658_17_o.tiff \
+        --h 6.0 --template_size 3 --search_size 10 --max_images 50 --max_time_seconds 7200
 """
 import os
 import sys
@@ -24,6 +29,7 @@ from datetime import datetime
 from datetime import timedelta
 from tqdm import tqdm
 import concurrent.futures
+import re
 
 # Import filtering and normalization logic
 from nonlocal_means_filter import apply_nonlocal_means
@@ -132,6 +138,8 @@ def create_hdf5_file(folder_path: Path, images, timestamps, filenames):
     earliest_time = timestamps[0]
     relative_times = [(ts - earliest_time).total_seconds() for ts in timestamps]
     image_stack = np.stack(images, axis=0)
+    # Parse chemistry and replicate
+    na2co3, cacl, replicate = parse_chemistry_and_replicate(folder_name)
     try:
         with h5py.File(str(output_file), 'w') as h5f:
             h5f.create_dataset(
@@ -156,6 +164,13 @@ def create_hdf5_file(folder_path: Path, images, timestamps, filenames):
             h5f.attrs['creation_time'] = datetime.now().isoformat()
             h5f.attrs['data_type'] = str(image_stack.dtype)
             h5f.attrs['description'] = f"Time series of filtered+normalized precipitation images from {folder_name} folder"
+            # Add chemistry and replicate attributes if found
+            if na2co3 is not None:
+                h5f.attrs['Na2CO3_mM'] = na2co3
+            if cacl is not None:
+                h5f.attrs['CaCl_mM'] = cacl
+            if replicate is not None:
+                h5f.attrs['replicate'] = replicate
         print(f"✓ HDF5 file created: {output_file.resolve()}")
     except Exception as e:
         print(f"[ERROR] Failed to save HDF5 to: {output_file.resolve()}")
@@ -221,6 +236,32 @@ def process_folder(folder_path: Path, normalizer: ImageNormalizer, h=6.0, templa
     images, timestamps, filenames = load_and_sort_images(image_tuples)
     create_hdf5_file(folder_path, images, timestamps, filenames)
     return True
+
+# Add this function for chemistry/replicate parsing
+
+def parse_chemistry_and_replicate(folder_name):
+    na2co3 = None
+    cacl = None
+    replicate = None
+    # Find replicate: number before -mix
+    rep_match = re.search(r'(\d+)-mix', folder_name)
+    if rep_match:
+        replicate = int(rep_match.group(1))
+    # Find chemistry: look for e.g. 2`5+100mM or 6mM
+    chem_match = re.search(r'([\d`\+]+)mM', folder_name)
+    if chem_match:
+        chem_str = chem_match.group(1)
+        if '+' in chem_str:
+            parts = chem_str.split('+')
+            if len(parts) == 2:
+                na_str, ca_str = parts
+                na2co3 = float(na_str.replace('`', '.'))
+                cacl = float(ca_str.replace('`', '.'))
+        else:
+            val = float(chem_str.replace('`', '.'))
+            na2co3 = val
+            cacl = val
+    return na2co3, cacl, replicate
 
 def main():
     parser = argparse.ArgumentParser(description="BMP to Filtered+Normalized HDF5 Pipeline")

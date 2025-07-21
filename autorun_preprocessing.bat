@@ -215,14 +215,12 @@ echo %GREEN%  Processing completed successfully!%NC%
 echo %GREEN%========================================%NC%
 echo.
 echo %YELLOW%Summary:%NC%
-if "%SKIP_BMP%"=="false" echo - BMP to TIFF conversion: %GREEN%COMPLETED%NC%
-if "%SKIP_BMP%"=="true" echo - BMP to TIFF conversion: %YELLOW%SKIPPED%NC%
-if "%SKIP_FILTER%"=="false" echo - Non-local means filtering: %GREEN%COMPLETED%NC%
-if "%SKIP_FILTER%"=="true" echo - Non-local means filtering: %YELLOW%SKIPPED%NC%
+echo - BMP to Filtered+Normalized HDF5: %GREEN%COMPLETED%NC%
+echo - Output HDF5 files now include Na2CO3, CaCl, and replicate attributes if parsed from folder name.
 echo.
 echo %BLUE%Next steps:%NC%
-echo - Use image_quality_inspector.py to compare BMP vs TIFF quality
-echo - Use raw_vs_filtered_inspector.py to analyze filtering results
+echo - Use analyze_timeseries.py or investigate_streaks.py for quality checks
+echo - Use image_quality_inspector.py to compare BMP vs TIFF quality (if needed)
 echo.
 
 endlocal 
