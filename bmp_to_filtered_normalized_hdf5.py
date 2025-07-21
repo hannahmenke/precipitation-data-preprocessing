@@ -21,6 +21,7 @@ from pathlib import Path
 from PIL import Image
 import argparse
 from datetime import datetime
+from datetime import timedelta
 from tqdm import tqdm
 import concurrent.futures
 
@@ -76,16 +77,42 @@ def find_folders_with_bmps(input_root: Path):
                 folders.append(folder)
     return folders
 
-def find_all_bmp_folder_pairs(input_root: Path):
+def find_all_bmp_folders_and_bmps(input_root: Path):
     """
-    Returns a list of (bmp_path, folder_path) for every BMP in every folder under input_root.
+    Returns a list of (folder_path, bmp_paths) for every folder under input_root that needs processing.
+    Applies timestamp filtering for folders with >19 BMPs.
+    Skips folders with existing HDF5.
     """
-    pairs = []
+    folder_bmp_list = []
     for folder in input_root.rglob(""):
         if folder.is_dir():
-            for bmp_path in folder.glob("*.bmp"):
-                pairs.append((bmp_path, folder))
-    return pairs
+            expected_h5_file = folder / f"{folder.name}_filtered_normalized_timeseries.h5"
+            if expected_h5_file.exists():
+                print(f"[DEBUG] Skipping folder {folder.name}: HDF5 file already exists")
+                continue
+            bmp_files = list(folder.glob("*.bmp"))
+            if len(bmp_files) > 19:
+                print(f"[DEBUG] Folder {folder.name} has {len(bmp_files)} BMPs, filtering to first 3 hours")
+                bmp_with_timestamps = []
+                for bmp_path in bmp_files:
+                    try:
+                        timestamp = parse_timestamp_from_filename(bmp_path.name)
+                        bmp_with_timestamps.append((bmp_path, timestamp))
+                    except Exception as e:
+                        print(f"[DEBUG] Could not parse timestamp from {bmp_path.name}: {e}")
+                        continue
+                if not bmp_with_timestamps:
+                    print(f"[DEBUG] No valid timestamps found in {folder.name}, skipping folder")
+                    continue
+                bmp_with_timestamps.sort(key=lambda x: x[1])
+                earliest_timestamp = bmp_with_timestamps[0][1]
+                three_hours_later = earliest_timestamp + timedelta(seconds=10800)
+                filtered_bmps = [bmp_path for bmp_path, timestamp in bmp_with_timestamps if timestamp <= three_hours_later]
+                print(f"[DEBUG] Filtered from {len(bmp_files)} to {len(filtered_bmps)} BMPs (first 3 hours)")
+                bmp_files = filtered_bmps
+            if bmp_files:
+                folder_bmp_list.append((folder, bmp_files))
+    return folder_bmp_list
 
 def load_and_sort_images(image_tuples):
     # image_tuples: list of (img_array, timestamp, filename)
@@ -101,27 +128,38 @@ def load_and_sort_images(image_tuples):
 def create_hdf5_file(folder_path: Path, images, timestamps, filenames):
     folder_name = folder_path.name
     output_file = folder_path / f"{folder_name}_filtered_normalized_timeseries.h5"
+    print(f"[DEBUG] Attempting to save HDF5 to: {output_file.resolve()}")
     earliest_time = timestamps[0]
     relative_times = [(ts - earliest_time).total_seconds() for ts in timestamps]
     image_stack = np.stack(images, axis=0)
-    with h5py.File(output_file, 'w') as h5f:
-        h5f.create_dataset('images', data=image_stack, compression='gzip', compression_opts=6, chunks=True)
-        h5f.create_dataset('times', data=np.array(relative_times))
-        timestamp_strings = [ts.isoformat() for ts in timestamps]
-        dt = h5py.special_dtype(vlen=str)
-        h5f.create_dataset('timestamps', data=timestamp_strings, dtype=dt)
-        h5f.create_dataset('filenames', data=filenames, dtype=dt)
-        h5f.attrs['folder_name'] = folder_name
-        h5f.attrs['num_images'] = len(images)
-        h5f.attrs['image_height'] = image_stack.shape[1]
-        h5f.attrs['image_width'] = image_stack.shape[2]
-        h5f.attrs['earliest_timestamp'] = earliest_time.isoformat()
-        h5f.attrs['latest_timestamp'] = timestamps[-1].isoformat()
-        h5f.attrs['total_duration_seconds'] = relative_times[-1]
-        h5f.attrs['creation_time'] = datetime.now().isoformat()
-        h5f.attrs['data_type'] = str(image_stack.dtype)
-        h5f.attrs['description'] = f"Time series of filtered+normalized precipitation images from {folder_name} folder"
-    print(f"✓ HDF5 file created: {output_file}")
+    try:
+        with h5py.File(str(output_file), 'w') as h5f:
+            h5f.create_dataset(
+                'images',
+                data=image_stack,
+                compression='gzip',
+                compression_opts=3,
+                chunks=(1, image_stack.shape[1], image_stack.shape[2])
+            )
+            h5f.create_dataset('times', data=np.array(relative_times))
+            timestamp_strings = [ts.isoformat() for ts in timestamps]
+            dt = h5py.special_dtype(vlen=str)
+            h5f.create_dataset('timestamps', data=timestamp_strings, dtype=dt)
+            h5f.create_dataset('filenames', data=filenames, dtype=dt)
+            h5f.attrs['folder_name'] = folder_name
+            h5f.attrs['num_images'] = len(images)
+            h5f.attrs['image_height'] = image_stack.shape[1]
+            h5f.attrs['image_width'] = image_stack.shape[2]
+            h5f.attrs['earliest_timestamp'] = earliest_time.isoformat()
+            h5f.attrs['latest_timestamp'] = timestamps[-1].isoformat()
+            h5f.attrs['total_duration_seconds'] = relative_times[-1]
+            h5f.attrs['creation_time'] = datetime.now().isoformat()
+            h5f.attrs['data_type'] = str(image_stack.dtype)
+            h5f.attrs['description'] = f"Time series of filtered+normalized precipitation images from {folder_name} folder"
+        print(f"✓ HDF5 file created: {output_file.resolve()}")
+    except Exception as e:
+        print(f"[ERROR] Failed to save HDF5 to: {output_file.resolve()}")
+        print(f"[ERROR] Exception: {e}")
     return output_file
 
 def process_single_bmp(args):
@@ -198,53 +236,38 @@ def main():
     if not input_root.exists():
         print(f"Input root directory does not exist: {input_root}")
         sys.exit(1)
-    # Initialize normalizer (just to get reference image path)
-    # normalizer = ImageNormalizer(args.reference_image) # This line is removed as per the edit hint
+    print(f"[DEBUG] Input root: {input_root.resolve()}")
 
-    # Gather all (bmp_path, folder_path) pairs
-    bmp_folder_pairs = find_all_bmp_folder_pairs(input_root)
-    if not bmp_folder_pairs:
+    # Gather all folders and their BMPs to process
+    folder_bmp_list = find_all_bmp_folders_and_bmps(input_root)
+    if not folder_bmp_list:
         print("No BMP files found in any folder.")
         sys.exit(0)
-    print(f"Found {len(bmp_folder_pairs)} BMP(s) in total.")
+    print(f"Found {sum(len(bmps) for _, bmps in folder_bmp_list)} BMP(s) in total across {len(folder_bmp_list)} folder(s).")
 
-    # Prepare args for parallel processing (no longer pass reference image path)
-    parallel_args = [(bmp_path, args.h, args.template_size, args.search_size) for bmp_path, _ in bmp_folder_pairs]
-    folder_for_bmp = {str(bmp_path): folder for bmp_path, folder in bmp_folder_pairs}
-
-    # Count expected images per folder
-    from collections import defaultdict
-    expected_counts = defaultdict(int)
-    for bmp_path, folder in bmp_folder_pairs:
-        expected_counts[folder] += 1
-
-    # Process all BMPs in parallel with progress bar, writing HDF5 as soon as a folder is done
-    results_by_folder = defaultdict(list)
-    errors = []
-    completed_folders = set()
-    with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_workers, initializer=worker_initializer, initargs=(args.reference_image,)) as executor:
-        from tqdm import tqdm
-        with tqdm(total=len(parallel_args), desc="Processing BMPs", unit="image") as pbar:
-            for res in executor.map(process_single_bmp, parallel_args):
-                normalized, timestamp, fname, err = res
-                folder = folder_for_bmp.get(str(Path(fname).resolve()), None)
-                if normalized is not None and folder is not None:
-                    results_by_folder[folder].append((normalized, timestamp, fname))
-                    # If we've collected all expected images for this folder, write HDF5 now
-                    if len(results_by_folder[folder]) == expected_counts[folder]:
-                        try:
-                            images, timestamps, filenames = load_and_sort_images(results_by_folder[folder])
-                            create_hdf5_file(folder, images, timestamps, filenames)
-                        except Exception as e:
-                            print(f"✗ Error writing HDF5 for {folder}: {e}")
-                        completed_folders.add(folder)
-                        # Free memory
-                        del results_by_folder[folder]
-                elif err:
-                    errors.append((fname, err))
-                pbar.update(1)
-    for fname, err in errors:
-        print(f"✗ Error processing {fname}: {err}")
+    for folder, bmp_files in folder_bmp_list:
+        print(f"[DEBUG] Processing folder: {folder.resolve()} with {len(bmp_files)} BMPs")
+        parallel_args = [(bmp_path, args.h, args.template_size, args.search_size) for bmp_path in bmp_files]
+        image_tuples = []
+        errors = []
+        with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_workers, initializer=worker_initializer, initargs=(args.reference_image,)) as executor:
+            with tqdm(total=len(parallel_args), desc=f"Processing BMPs in {folder.name}", unit="image") as pbar:
+                for res in executor.map(process_single_bmp, parallel_args):
+                    normalized, timestamp, fname, err = res
+                    if normalized is not None:
+                        image_tuples.append((normalized, timestamp, fname))
+                    elif err:
+                        errors.append((fname, err))
+                    pbar.update(1)
+        for fname, err in errors:
+            print(f"✗ Error processing {fname}: {err}")
+        if not image_tuples:
+            print(f"No images processed successfully in {folder.name}")
+            continue
+        images, timestamps, filenames = load_and_sort_images(image_tuples)
+        create_hdf5_file(folder, images, timestamps, filenames)
+        # Explicitly free memory
+        del image_tuples, images, timestamps, filenames
 
 if __name__ == "__main__":
     main() 

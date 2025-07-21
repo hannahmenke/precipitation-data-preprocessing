@@ -226,6 +226,35 @@ python image_quality_inspector.py
 ```
 Compares conversion quality between formats.
 
+### 5.1 Streak/Artifact Investigation and Sensor Issues
+
+#### Investigate Streaks and Regional Artifacts (`investigate_streaks.py`)
+
+If you observe streaks, bands, or regional intensity artifacts in your processed data, use the `investigate_streaks.py` tool to diagnose the source:
+
+```bash
+python investigate_streaks.py --h5_file path/to/problematic.h5 --bmp_file path/to/sample.bmp --output_dir streak_analysis_output
+```
+
+- The tool analyzes the reference image, raw BMP, filtered, and normalized images for regional intensity changes (e.g. left/right or top/bottom differences).
+- It saves comprehensive diagnostic plots in the specified output directory.
+- It reports statistics such as 'Left vs Right difference' and highlights if the artifact is present in the raw data or introduced by processing.
+
+**Typical findings:**
+- If the reference image is uniform but the raw BMP shows a large left/right intensity difference, the artifact is likely due to sensor non-uniformity, lighting gradients, or calibration issues—not the pipeline.
+- Artifacts present in the raw data will persist through filtering and normalization.
+
+**Recommendations if artifacts are detected:**
+1. **Check imaging system calibration** (sensor flat-field, gain, offset)
+2. **Verify illumination uniformity** (avoid gradients)
+3. **Consider flat-field correction** before running the pipeline
+4. **Try a different reference image** for normalization
+5. **Use the diagnostic plots** to guide troubleshooting
+
+See the `streak_analysis_output/` directory for example output plots and statistics.
+
+---
+
 ### 6. BMP to Filtered+Normalized HDF5 Pipeline (`bmp_to_filtered_normalized_hdf5.py`)
 - **Purpose**: Recursively finds all BMP images in all folders under `/image`, applies non-local means filtering, then normalizes them using the 'peak_align' (peak shift) method with the default reference image, and saves the results as an HDF5 file per folder. No intermediate TIFFs are created.
 - **Parallel Processing:** All BMPs in all folders are processed in parallel, maximizing CPU usage. The script displays a live progress bar for the overall processing. The reference image is loaded only once per worker process for efficiency, reducing I/O and memory usage (especially important for large reference images and datasets).

@@ -36,6 +36,7 @@ venv.bak/
 *.swp
 *.swo
 *~
+.cursorrules
 
 # macOS
 .DS_Store

@@ -4,3 +4,5 @@ pillow
 tqdm
 opencv-python
 scikit-image 
+matplotlib
+scipy 
