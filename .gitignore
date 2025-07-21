@@ -121,7 +121,12 @@ models/
 !*example*.xlsx
 !*template*.csv 
 
-# Ignore large files to avoid GitHub's 100MB file size limit
+# Always ignore large data folders
+image/
+3mM/
+6mM/
+
+# Always ignore large file types
 *.jc
 *.h5
 *.bmp
