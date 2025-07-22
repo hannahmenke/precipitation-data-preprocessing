@@ -674,3 +674,65 @@ The classification component is designed to work with particle measurement data 
 2. **Feature Extraction**: Extract particle measurements using image analysis software
 3. **Data Export**: Save measurements to Excel format
 4. **Classification**: Run the XGBoost classifier to predict particle types 
+
+# Automated Training & Validation Pipeline
+
+## Overview
+
+The pipeline now includes a fully automated end-to-end training, validation, and reporting workflow for precipitation data classification. This is orchestrated by `autorun_training.py` and associated scripts. The workflow covers:
+- Data discovery (auto-detects all Excel files in `training_data/` and `data_for_classification/`)
+- Feature engineering (adds 9 new features for improved classification)
+- Enhanced ensemble model training (with clustering, resampling, and soft-voting ensemble)
+- Automated validation on **all** datasets in `data_for_classification/` (not just val3/val6)
+- Comprehensive, publication-ready visualizations
+- Timestamped results folders for reproducibility
+
+## How It Works
+
+1. **Run the pipeline**:
+   ```bash
+   conda activate precipitation_data
+   python autorun_training.py
+   # or with options:
+   python autorun_training.py --skip-feature-eng --skip-training
+   ```
+2. **All results are saved in a new timestamped folder** (e.g., `results_YYYYMMDD_HHMMSS/`).
+3. **Validation is fully automated**:
+   - Every Excel file in `data_for_classification/` is processed and evaluated.
+   - No need to manually specify validation files; new files are automatically included.
+
+## Validation Visualizations
+
+- **Main overview plot**: `enhanced_model_validation_results.png`
+  - Shows validation accuracy for **all** datasets and the combined set
+  - Per-class accuracy, confidence distributions, correct vs incorrect confidence
+  - Class distribution pie chart
+  - **Dataset size comparison bar chart**
+  - Performance overview and summary
+  - **No confusion matrices** (these are only in the individual dataset plots)
+  - **Plots are only saved to file, not displayed**
+
+- **Individual plots**: For each validation dataset (e.g., `enhanced_model_3mM-5_finalData_results.png`), a dedicated plot is generated with:
+  - Confusion matrix
+  - Confidence distribution
+  - Class-wise performance
+
+- **Train/test performance plot**: `train_test_performance.png`
+
+## Outputs
+
+All outputs are saved in the timestamped results folder:
+- **models/**: Enhanced ensemble model, cluster model, scaler, selector, and metadata
+- **plots/**:
+  - `enhanced_model_validation_results.png` (overview for all validation datasets)
+  - `enhanced_model_<dataset>_results.png` (individual plots for each validation set)
+  - `train_test_performance.png` (train/test split performance)
+- **reports/**: Pipeline report, test results Excel, predictions for each validation set
+- **data/**: Improved train and validation datasets
+- **logs/**: Any log files (if generated)
+
+**Note:** Plots are only saved to file and are not displayed interactively.
+
+## Full Workflow Details
+
+For a detailed, step-by-step explanation of the pipeline, feature engineering, model, and validation process, see [`autorun_training_workflow.md`](./autorun_training_workflow.md). 

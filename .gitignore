@@ -135,3 +135,6 @@ image/
 *.png
 *.jpg
 *.jpeg 
+
+# Ignore all timestamped results folders
+results_*/ 
