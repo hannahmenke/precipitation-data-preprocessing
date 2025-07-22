@@ -6,3 +6,4 @@ opencv-python
 scikit-image 
 matplotlib
 scipy 
+umap-learn 
