@@ -56,8 +56,8 @@ def preprocess_prediction_data(df, feature_names, scaler, feature_selector):
     Args:
         df: Input DataFrame with new data
         feature_names: List of selected feature names (12 features)
-        scaler: Fitted StandardScaler from training (expects 17 features)
-        feature_selector: Fitted feature selector to reduce 17→12 features
+        scaler: Fitted StandardScaler from training (expects 20 features)
+        feature_selector: Fitted feature selector to reduce 20→12 features
         
     Returns:
         Preprocessed feature matrix
@@ -68,13 +68,38 @@ def preprocess_prediction_data(df, feature_names, scaler, feature_selector):
     
     print(f"Input data shape: {df.shape}")
     
+    # Create a copy to avoid modifying original data
+    df = df.copy()
+    
     # Apply same preprocessing as training script
     # Handle the "Aera" typo by creating a standardized "Area" column if needed
     if 'Aera' in df.columns and 'Area' not in df.columns:
         df['Area'] = df['Aera']
         print("ℹ️  Found 'Aera' column - standardized to 'Area' and excluded original")
     
-    # Get all features that the scaler expects (17 features)
+    # Handle validation data column differences
+    if 'NO.' in df.columns and 'ID' not in df.columns:
+        df['ID'] = df['NO.']
+        print("ℹ️  Mapped 'NO.' to 'ID' column")
+    
+    # Create missing columns if needed (using reasonable defaults/mappings)
+    if 'Gray_ave' not in df.columns:
+        if 'MeanIntensity' in df.columns:
+            df['Gray_ave'] = df['MeanIntensity']
+            print("ℹ️  Created 'Gray_ave' from 'MeanIntensity'")
+        else:
+            df['Gray_ave'] = 0  # fallback
+            print("⚠️  Created 'Gray_ave' with default value 0")
+    
+    if 'overall_mean_gray' not in df.columns:
+        if 'MeanIntensity' in df.columns:
+            df['overall_mean_gray'] = df['MeanIntensity']
+            print("ℹ️  Created 'overall_mean_gray' from 'MeanIntensity'")
+        else:
+            df['overall_mean_gray'] = 0  # fallback
+            print("⚠️  Created 'overall_mean_gray' with default value 0")
+    
+    # Get all features that the scaler expects
     all_feature_names = scaler.feature_names_in_
     print(f"Scaler expects {len(all_feature_names)} features: {list(all_feature_names)}")
     print(f"After feature selection, model uses {len(feature_names)} features: {feature_names}")
@@ -85,7 +110,7 @@ def preprocess_prediction_data(df, feature_names, scaler, feature_selector):
         print(f"Available columns: {sorted(df.columns.tolist())}")
         raise ValueError(f"Missing required features for scaling: {missing_features}")
     
-    # Extract all features needed for scaling (17 features)
+    # Extract all features needed for scaling
     X_all = df[all_feature_names].copy()
     
     # Handle missing values for all features (same as training)
@@ -98,11 +123,11 @@ def preprocess_prediction_data(df, feature_names, scaler, feature_selector):
         else:
             print(f"  {col}: 0")
     
-    # Scale all features using the trained scaler (17 features)
+    # Scale all features using the trained scaler
     X_scaled_all = scaler.transform(X_all)
     X_scaled_all = pd.DataFrame(X_scaled_all, columns=all_feature_names, index=X_all.index)
     
-    # Apply feature selection to get the same features as training (12 features)
+    # Apply feature selection to get the same features as training
     X_selected = feature_selector.transform(X_scaled_all)
     X_final = pd.DataFrame(X_selected, columns=feature_names, index=X_all.index)
     

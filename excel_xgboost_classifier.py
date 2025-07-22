@@ -25,7 +25,47 @@ import argparse
 import warnings
 import joblib
 from datetime import datetime
+from tqdm import tqdm
+import time
 warnings.filterwarnings('ignore')
+
+class TqdmGridSearchCV(GridSearchCV):
+    """
+    GridSearchCV with tqdm progress bar support.
+    """
+    def _run_search(self, evaluate_candidates):
+        """Run search with progress bar."""
+        from sklearn.model_selection import ParameterGrid
+        param_grid_size = len(ParameterGrid(self.param_grid))
+        cv_folds = self.cv if isinstance(self.cv, int) else 5
+        total_fits = param_grid_size * cv_folds
+        
+        print(f"🔍 Hyperparameter Grid Search Progress")
+        print(f"   Parameter combinations: {param_grid_size:,}")
+        print(f"   Cross-validation folds: {cv_folds}")
+        print(f"   Total model fits: {total_fits:,}")
+        print(f"   Estimated time: {total_fits*2/60:.1f}-{total_fits*5/60:.1f} minutes")
+        
+        # Track progress
+        self._progress_bar = tqdm(total=param_grid_size, desc="Grid Search", unit="params")
+        self._completed = 0
+        
+        def progress_evaluate_candidates(candidates):
+            for candidate in candidates:
+                start_time = time.time()
+                evaluate_candidates([candidate])
+                elapsed = time.time() - start_time
+                self._completed += 1
+                self._progress_bar.set_postfix({
+                    'Best Score': f"{self.best_score_:.4f}" if hasattr(self, 'best_score_') else "N/A",
+                    'Time/Param': f"{elapsed:.1f}s"
+                })
+                self._progress_bar.update(1)
+        
+        try:
+            super()._run_search(progress_evaluate_candidates)
+        finally:
+            self._progress_bar.close()
 
 def load_excel_data(file_paths):
     """
@@ -310,16 +350,16 @@ def train_xgboost_model(X, y, feature_names, test_size=0.2, random_state=42, bal
     
     print(f"Balanced training set size: {X_train_balanced.shape[0]} samples")
     
-    # Anti-overfitting hyperparameter grid
+    # Balanced hyperparameter grid (good coverage, reasonable time)
     param_grid = {
-        'n_estimators': [50, 100, 150],        # Fewer trees
-        'max_depth': [2, 3, 4],                # Shallower trees
-        'learning_rate': [0.01, 0.05, 0.1],    # Lower learning rates
-        'subsample': [0.6, 0.8, 0.9],          # Subsampling for regularization
-        'colsample_bytree': [0.6, 0.8, 1.0],   # Feature subsampling
-        'reg_alpha': [0, 0.1, 1],              # L1 regularization
-        'reg_lambda': [1, 2, 5],               # L2 regularization
-        'min_child_weight': [1, 3, 5],         # Minimum samples per leaf
+        'n_estimators': [150, 250, 350],           # 3 tree options
+        'max_depth': [3, 4, 5],                    # 3 depth options
+        'learning_rate': [0.1, 0.15, 0.2],        # 3 learning rates
+        'subsample': [0.8, 0.9, 1.0],             # 3 subsample options
+        'colsample_bytree': [0.8, 0.9, 1.0],      # 3 feature sampling options
+        'reg_alpha': [0, 0.1, 0.5],               # 3 L1 regularization options
+        'reg_lambda': [0.5, 1, 2],                # 3 L2 regularization options
+        'min_child_weight': [1, 3, 5],            # 3 child weight options
         'random_state': [random_state]
     }
     
@@ -361,13 +401,13 @@ def train_xgboost_model(X, y, feature_names, test_size=0.2, random_state=42, bal
     else:
         # Perform grid search without sample weights
         print("Performing hyperparameter tuning on balanced data...")
-        grid_search = GridSearchCV(
+        grid_search = TqdmGridSearchCV(
             xgb_model, 
             param_grid, 
             cv=5, 
             scoring='balanced_accuracy',  # Better for imbalanced classes
             n_jobs=-1,
-            verbose=1
+            verbose=0  # Disable sklearn verbose since we have progress bar
         )
         grid_search.fit(X_train_balanced, y_train_balanced)
     
@@ -587,6 +627,7 @@ Examples:
   python excel_xgboost_classifier.py --balance-method class_weights    # Use class weights
   python excel_xgboost_classifier.py --max-features 8                  # Keep only 8 best features
   python excel_xgboost_classifier.py --no-feature-selection            # Use all features (may overfit)
+  python excel_xgboost_classifier.py --train-files file1.xlsx file2.xlsx --test-files test1.xlsx test2.xlsx # Explicit train/test split
         """
     )
     
@@ -645,8 +686,131 @@ Examples:
         help="Disable automatic feature selection (may cause overfitting)"
     )
     
+    parser.add_argument(
+        "--train-files", "-tr",
+        nargs="+",
+        help="Excel files to use for training (overrides --files if provided)"
+    )
+    parser.add_argument(
+        "--test-files", "-te",
+        nargs="+",
+        help="Excel files to use for testing (overrides --files if provided)"
+    )
+    
     args = parser.parse_args()
     
+    # If train-files and test-files are provided, use explicit split
+    if args.train_files and args.test_files:
+        print(f"\nExplicit train/test split mode:")
+        print(f"Train files: {args.train_files}")
+        print(f"Test files: {args.test_files}")
+        train_df = load_excel_data(args.train_files)
+        test_df = load_excel_data(args.test_files)
+        # Preprocess train
+        X_train, y_train, feature_names, scaler, label_encoder = preprocess_data(train_df, args.target_column)
+        # Preprocess test (use train's scaler and encoder)
+        test_df_clean = test_df.dropna(subset=[args.target_column]).copy()
+        X_test_raw = test_df_clean[feature_names].copy()
+        # Handle missing values in test features the same way as training
+        for col in X_test_raw.columns:
+            if X_test_raw[col].isnull().sum() > 0:
+                X_test_raw[col].fillna(X_test_raw[col].median(), inplace=True)
+        # Apply the SAME scaler fitted on training data
+        X_test = scaler.transform(X_test_raw)
+        # Apply the SAME label encoder fitted on training data
+        y_test_raw = test_df_clean[args.target_column].copy()
+        # Only keep test samples with labels seen in training
+        seen_labels = set(label_encoder.classes_)
+        y_test_raw_series = pd.Series(y_test_raw)
+        mask = y_test_raw_series.isin(seen_labels)
+        if not mask.all():
+            print(f"Warning: {sum(~mask)} test samples have unseen labels and will be ignored.")
+        y_test_raw = y_test_raw_series[mask].values
+        X_test = X_test[mask.values]
+        y_test = label_encoder.transform(y_test_raw)
+        # Train model (no internal split)
+        # Feature selection (if enabled)
+        if not args.no_feature_selection:
+            X_train_selected, selected_features, feature_selector = select_features(
+                X_train, y_train, feature_names, max_features=args.max_features, random_state=args.random_seed
+            )
+            # Apply same feature selection to test set
+            X_test_selected = pd.DataFrame(X_test, columns=feature_names)[selected_features].values
+        else:
+            X_train_selected, selected_features, feature_selector = X_train, feature_names, None
+            X_test_selected = X_test
+
+        # Balance the training data only
+        X_train_balanced, y_train_balanced, class_weights = balance_dataset(
+            X_train_selected, y_train, method=args.balance_method, random_state=args.random_seed
+        )
+
+        # Train XGBoost model directly (no split needed)
+        print(f"\n{'='*60}")
+        print("MODEL TRAINING (Anti-Overfitting)")
+        print(f"{'='*60}")
+        
+        # Balanced hyperparameter grid (good coverage, reasonable time)
+        param_grid = {
+            'n_estimators': [150, 250, 350],           # 3 tree options
+            'max_depth': [3, 4, 5],                    # 3 depth options
+            'learning_rate': [0.1, 0.15, 0.2],        # 3 learning rates
+            'subsample': [0.8, 0.9, 1.0],             # 3 subsample options
+            'colsample_bytree': [0.8, 0.9, 1.0],      # 3 feature sampling options
+            'reg_alpha': [0, 0.1, 0.5],               # 3 L1 regularization options
+            'reg_lambda': [0.5, 1, 2],                # 3 L2 regularization options
+            'min_child_weight': [1, 3, 5],            # 3 child weight options
+            'random_state': [args.random_seed]
+        }
+        
+        # Create XGBoost classifier
+        xgb_model = xgb.XGBClassifier(
+            objective='multi:softprob',
+            eval_metric='mlogloss',
+            random_state=args.random_seed,
+            n_jobs=-1,
+            verbosity=0
+        )
+        
+        # Perform grid search with hyperparameter tuning
+        print("Performing hyperparameter tuning on balanced training data...")
+        grid_search = TqdmGridSearchCV(
+            xgb_model, 
+            param_grid, 
+            cv=5, 
+            scoring='balanced_accuracy',  # Better for imbalanced classes
+            n_jobs=-1,
+            verbose=0  # Disable sklearn verbose since we have progress bar
+        )
+        grid_search.fit(X_train_balanced, y_train_balanced)
+        
+        print(f"Best parameters: {grid_search.best_params_}")
+        print(f"Best cross-validation score: {grid_search.best_score_:.4f}")
+        
+        # Get the best model
+        model = grid_search.best_estimator_
+        print(f"✓ Best model trained on {len(X_train_balanced)} balanced samples")
+
+        # Evaluate on test set
+        results = evaluate_model(model, X_train_balanced, X_test_selected, y_train_balanced, y_test, selected_features)
+        # Create visualizations
+        create_visualizations(results, results['feature_importance'], args.save_plots)
+        # Save model components
+        saved_files = save_model_components(model, scaler, label_encoder, selected_features, feature_selector)
+        print(f"\n{'='*60}")
+        print("CLASSIFICATION COMPLETE!")
+        print(f"{'='*60}")
+        print(f"✓ Final Test Accuracy: {results['test_accuracy']:.4f}")
+        print(f"✓ Model successfully trained on {len(X_train)} samples")
+        print(f"✓ Used {len(selected_features)} selected features: {selected_features}")
+        if feature_selector is not None:
+            print(f"✓ Feature selection: Reduced from {len(feature_names)} to {len(selected_features)} features")
+        print(f"✓ Class mapping: {dict(zip(label_encoder.classes_, range(len(label_encoder.classes_))))}")
+        print(f"✓ Model components saved to: models/")
+        print(f"\n📋 To use this model for predictions:")
+        print(f"  python excel_predictor.py --data new_data.xlsx")
+        return
+
     # Validate files exist
     for file_path in args.files:
         if not Path(file_path).exists():
