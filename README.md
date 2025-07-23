@@ -296,6 +296,157 @@ conda create -n precipitation_data python=3.11 numpy=1.26 pillow matplotlib open
 conda activate precipitation_data
 ```
 
+## Additional Scripts
+
+Below are additional scripts included in this repository, organized by use case. These tools support data analysis, model evaluation, feature engineering, quality inspection, and advanced investigation.
+
+---
+
+### 1. Data Analysis & Visualization
+
+#### `analyze_timeseries.py`
+- **Purpose:** Analyze HDF5 timeseries files, visualizing the first, middle, and last images, difference images, and histograms.
+- **Features:**
+  - Plots first, middle, last, and difference images
+  - Shows histograms and mean/std intensity over time
+  - Saves or displays comprehensive visualizations
+- **Usage:**
+  ```sh
+  python analyze_timeseries.py --file path/to/timeseries.h5 [--save output.png]
+  ```
+
+#### `compare_feature_distributions.py`
+- **Purpose:** Compare feature distributions between datasets or classes.
+- **Features:**
+  - Plots histograms, boxplots, or violin plots for selected features
+  - Useful for data exploration and class comparison
+- **Usage:**
+  ```sh
+  python compare_feature_distributions.py --file data.xlsx --feature Area
+  ```
+
+#### `create_simple_train_test_plot.py`, `create_train_test_plots.py`, `create_validation_plots.py`, `create_validation_visualizations.py`
+- **Purpose:** Generate various plots for train/test splits and validation results.
+- **Features:**
+  - Visualize data splits, model performance, and validation metrics
+  - Save plots as PNG files for reporting
+- **Usage:**
+  ```sh
+  python create_simple_train_test_plot.py
+  python create_train_test_plots.py
+  python create_validation_plots.py
+  python create_validation_visualizations.py
+  ```
+
+#### `clustering_error_analysis.py`
+- **Purpose:** Perform clustering-based error analysis for XGBoost predictions.
+- **Features:**
+  - Identifies error patterns using clustering (KMeans, DBSCAN, etc.)
+  - Visualizes clusters and error rates
+  - Exports results to Excel and PNG
+- **Usage:**
+  ```sh
+  python clustering_error_analysis.py
+  ```
+
+---
+
+### 2. Model Training & Evaluation
+
+#### `test_enhanced_model.py`
+- **Purpose:** Test the enhanced model on test data and report performance.
+- **Features:**
+  - Loads trained model and test data
+  - Reports accuracy, confusion matrix, and feature importance
+- **Usage:**
+  ```sh
+  python test_enhanced_model.py
+  ```
+
+#### `improve_model_with_clustering.py`
+- **Purpose:** Enhance model performance using clustering-based techniques.
+- **Features:**
+  - Integrates clustering into the training pipeline
+  - May improve generalization and error analysis
+- **Usage:**
+  ```sh
+  python improve_model_with_clustering.py
+  ```
+
+#### `excel_predictor.py`
+- **Purpose:** Make predictions on new Excel data using a trained model.
+- **Features:**
+  - Loads model and scaler
+  - Outputs predictions and probabilities to Excel
+- **Usage:**
+  ```sh
+  python excel_predictor.py --data new_data.xlsx
+  ```
+
+---
+
+### 3. Feature Engineering & Improvement
+
+#### `improve_features.py`
+- **Purpose:** Engineer and improve features for model training.
+- **Features:**
+  - Adds new features or transforms existing ones
+  - Saves improved datasets for downstream use
+- **Usage:**
+  ```sh
+  python improve_features.py --input data.xlsx --output improved_data.xlsx
+  ```
+
+---
+
+### 4. Quality Inspection & Investigation
+
+#### `raw_vs_filtered_inspector.py`
+- **Purpose:** Compare raw and filtered images side by side for quality assessment.
+- **Features:**
+  - Displays or saves side-by-side comparisons
+  - Supports custom subset extraction and batch mode
+- **Usage:**
+  ```sh
+  python raw_vs_filtered_inspector.py --auto
+  ```
+
+#### `investigate_streaks.py`
+- **Purpose:** Investigate streak artifacts in normalized precipitation data.
+- **Features:**
+  - Examines raw images, reference quality, filtering, and normalization steps
+  - Visualizes each processing stage
+- **Usage:**
+  ```sh
+  python investigate_streaks.py --h5_file path/to/problematic.h5
+  python investigate_streaks.py --bmp_folder path/to/folder --reference_image path/to/ref.bmp
+  ```
+
+#### `uncertainty_quantification.py`
+- **Purpose:** Quantify prediction uncertainty for model outputs.
+- **Features:**
+  - Computes and visualizes uncertainty metrics
+  - Useful for model evaluation and reporting
+- **Usage:**
+  ```sh
+  python uncertainty_quantification.py
+  ```
+
+---
+
+### 5. Utility Scripts
+
+These scripts are already documented in detail above, but for completeness:
+- `check_and_clean_h5.py`: HDF5 integrity checker and cleaner
+- `inspect_hdf5.py`: HDF5 structure/content inspector
+- `images_to_hdf5.py`: Converts filtered TIFFs to HDF5 timeseries
+- `image_quality_inspector.py`: Compares BMP and TIFF image quality
+- `bmp_to_tiff_converter.py`, `nonlocal_means_filter.py`, `bmp_to_filtered_workflow.py`, `image_normalization.py`: Core pipeline utilities
+
+---
+
+For more details on each script, see the script's docstring or run with `--help` for command-line options.
+
 ## File Structure
 
 ```
@@ -736,3 +887,65 @@ All outputs are saved in the timestamped results folder:
 ## Full Workflow Details
 
 For a detailed, step-by-step explanation of the pipeline, feature engineering, model, and validation process, see [`autorun_training_workflow.md`](./autorun_training_workflow.md). 
+
+## HDF5 File Integrity Checker: `check_and_clean_h5.py`
+
+This utility script helps you maintain the integrity of your HDF5 dataset folders by:
+
+- **Automatically deleting all `._*.h5` files** (macOS metadata) it finds during the scan.
+- **Recursively checking all `.h5` files** in a specified root directory (default: `image/`) for corruption (cannot be opened or missing the `images` dataset).
+- **Listing all problematic/corrupted files** at the end of the scan.
+- **Optionally deleting problematic/corrupted files** if the `--delete` flag is provided.
+
+### Usage
+
+- **List problematic files (no deletion except ._ files):**
+  ```sh
+  python check_and_clean_h5.py --root image
+  ```
+- **List and delete problematic files:**
+  ```sh
+  python check_and_clean_h5.py --root image --delete
+  ```
+
+### Output
+- The script prints a summary of how many files were checked, how many were good, how many were problematic, and how many `._*.h5` files were deleted.
+- If the `--delete` flag is used, it will also delete and report each problematic `.h5` file.
+- A list of all problematic files is printed at the end for your review.
+
+### Notes
+- The script is safe to run multiple times; it will only delete `._*.h5` files and, if requested, corrupted `.h5` files.
+- It is recommended to run this script after copying or generating new HDF5 files, especially if you use macOS or external drives. 
+
+## HDF5 Inspector: `inspect_hdf5.py`
+
+This utility script allows you to inspect the structure and contents of HDF5 files created by the pipeline (e.g., *_filtered_timeseries.h5 or *_filtered_normalized_timeseries.h5 files).
+
+- **Lists all file-level attributes** (e.g., chemistry, replicate, creation time).
+- **Displays all datasets** in the file, including:
+  - Dataset name (e.g., /images, /times, /timestamps, /filenames)
+  - Shape, data type, and number of elements
+  - For images: memory size and pixel value range
+  - For times: time range, duration, and time intervals
+  - For timestamps: first and last timestamp
+  - For filenames: all included file names
+- **Shows file size, uncompressed size, and compression ratio**
+
+### Usage
+
+- **Inspect all *_filtered_timeseries.h5 files in the current directory and subdirectories:**
+  ```sh
+  python inspect_hdf5.py
+  ```
+- **Inspect a specific HDF5 file:**
+  ```sh
+  python inspect_hdf5.py path/to/your_file_filtered_timeseries.h5
+  ```
+- **Inspect multiple files at once:**
+  ```sh
+  python inspect_hdf5.py file1.h5 file2.h5
+  ```
+
+### Output
+- The script prints a detailed summary for each file, including all attributes and datasets, and a summary of file size and compression.
+- Useful for verifying data integrity, structure, and metadata before further analysis or sharing. 
