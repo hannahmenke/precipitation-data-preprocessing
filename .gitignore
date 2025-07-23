@@ -137,4 +137,4 @@ image/
 *.jpeg 
 
 # Ignore all timestamped results folders
-results_*/ 
+results*/ 
