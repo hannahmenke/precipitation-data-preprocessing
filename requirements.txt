@@ -1,11 +1,30 @@
-h5py
-numpy
-pillow
-tqdm
-opencv-python
-scikit-image 
+# Core data science and numerical computing
+numpy>=1.26.0
+pandas
+scipy
+
+# Machine learning libraries
+scikit-learn
+xgboost>=2.0.0
+imbalanced-learn>=0.11.0
+umap-learn
+
+# Data visualization
 matplotlib
-scipy 
-umap-learn 
+seaborn
+
+# Image processing
+pillow
+opencv-python
+scikit-image
+
+# Data storage and I/O
+h5py
+openpyxl>=3.1.0
+joblib
+
+# Utilities
+tqdm
+
 # Standard library dependencies used by autorun_training.py
-# shutil and pathlib are part of the Python standard library 
+# shutil, pathlib, os, sys, datetime, etc. are part of the Python standard library 
