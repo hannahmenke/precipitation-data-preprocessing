@@ -105,8 +105,9 @@ processed/
 6mM/*.tif
 
 # But keep the directory structure
-!3mM/.gitkeep
-!6mM/.gitkeep 
+!training_data/.gitkeep
+!data_for_classification/.gitkeep 
+!image/.gitkeep
 
 # Machine Learning data and models
 training_data/
@@ -123,8 +124,7 @@ models/
 
 # Always ignore large data folders
 image/
-3mM/
-6mM/
+results*/
 
 # Always ignore large file types
 *.jc

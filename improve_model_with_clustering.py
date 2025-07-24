@@ -43,7 +43,7 @@ class ClusterBasedModelImprover:
         
     def load_data_and_model(self):
         """Load training data and existing model components."""
-        print("📂 Loading data and model components...")
+        print("[LOAD] Loading data and model components...")
         
         # Load existing model components
         models_dir = Path("models")
@@ -228,10 +228,10 @@ class ClusterBasedModelImprover:
     
     def evaluate_improvements(self):
         """Evaluate the improved model on validation data."""
-        print("📊 Evaluating model improvements...")
+        print("[EVAL] Evaluating model improvements...")
         
-        # Load validation data
-        val_df = pd.read_excel('validation_data_improved.xlsx')
+        # Load test data (was incorrectly called validation_data)
+        val_df = pd.read_excel('test_data_improved.xlsx')
         
         # Preprocess validation data
         exclude_cols = ['NO.', 'ID', 'type', 'source_file', 'Centroid', 'BoundingBox', 'WeightedCentroid']
@@ -368,7 +368,7 @@ class ClusterBasedModelImprover:
 
 def main():
     """Main function to improve model using clustering insights."""
-    print("🚀 Model Improvement Using Clustering Insights")
+    print("[START] Model Improvement Using Clustering Insights")
     print("=" * 60)
     
     try:
@@ -395,17 +395,17 @@ def main():
         # Save improved model
         improver.save_improved_model()
         
-        print(f"\n✅ Model improvement complete!")
-        print(f"🎯 Final improvement: {results['improvement']:+.1%}")
+        print(f"\n[SUCCESS] Model improvement complete!")
+        print(f"[RESULT] Final improvement: {results['improvement']:+.1%}")
         
         if results['improvement'] > 0:
-            print(f"🎉 SUCCESS: Enhanced model performs better!")
+            print(f"[SUCCESS] Enhanced model performs better!")
         else:
-            print(f"⚠️  Note: Enhancement didn't improve validation accuracy")
+            print(f"[WARNING] Note: Enhancement didn't improve validation accuracy")
             print(f"   This could indicate overfitting or need for different approach")
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         import traceback
         traceback.print_exc()
 

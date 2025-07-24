@@ -7,3 +7,5 @@ scikit-image
 matplotlib
 scipy 
 umap-learn 
+# Standard library dependencies used by autorun_training.py
+# shutil and pathlib are part of the Python standard library 

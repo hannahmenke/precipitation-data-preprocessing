@@ -36,7 +36,7 @@ def load_model_components():
         return model, cluster_model, original_scaler, original_selector, original_feature_names, metadata, label_mapping
     
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(f"[ERROR] Error loading model: {e}")
         return None, None, None, None, None, None, None
 
 def create_cluster_aware_features(X_selected, cluster_model):
@@ -104,7 +104,7 @@ def prepare_data_for_model(df, original_scaler, original_selector, cluster_model
         return X_enhanced, y
     
     except Exception as e:
-        print(f"❌ Error preparing data: {e}")
+        print(f"[ERROR] Error preparing data: {e}")
         return None, None
 
 def create_train_test_performance_plot():
@@ -115,41 +115,41 @@ def create_train_test_performance_plot():
     # Load model components
     model, cluster_model, scaler, selector, feature_names, metadata, label_mapping = load_model_components()
     if model is None:
-        print("❌ Could not load model components")
+        print("[ERROR] Could not load model components")
         return None, None
     
     # Load training data
-    print("📂 Loading training data...")
+    print("[LOAD] Loading training data...")
     try:
         train_df = pd.read_excel('training_data/train_improved.xlsx')
         print(f"✓ Loaded training data: {train_df.shape}")
         
         X_train, y_train = prepare_data_for_model(train_df, scaler, selector, cluster_model)
         if X_train is None:
-            print("❌ Could not prepare training data")
+            print("[ERROR] Could not prepare training data")
             return None, None
             
     except Exception as e:
-        print(f"❌ Error loading training data: {e}")
+        print(f"[ERROR] Error loading training data: {e}")
         return None, None
     
     # Load test data
-    print("📂 Loading test data...")
+    print("[LOAD] Loading test data...")
     try:
-        test_df = pd.read_excel('validation_data_improved.xlsx')
+        test_df = pd.read_excel('test_data_improved.xlsx')
         print(f"✓ Loaded test data: {test_df.shape}")
         
         X_test, y_test = prepare_data_for_model(test_df, scaler, selector, cluster_model)
         if X_test is None:
-            print("❌ Could not prepare test data")
+            print("[ERROR] Could not prepare test data")
             return None, None
             
     except Exception as e:
-        print(f"❌ Error loading test data: {e}")
+        print(f"[ERROR] Error loading test data: {e}")
         return None, None
     
     # Make predictions
-    print("🎯 Making predictions...")
+    print("[PREDICT] Making predictions...")
     y_train_pred_raw = model.predict(X_train)
     y_train_pred = np.array([label_mapping[pred] for pred in y_train_pred_raw])
     y_test_pred_raw = model.predict(X_test)
@@ -283,7 +283,7 @@ def main():
         print(f"   Gap:      {test_acc - train_acc:+.1%}")
     
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         import traceback
         traceback.print_exc()
 

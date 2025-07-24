@@ -62,7 +62,7 @@ def create_improved_features(df):
 
 def load_and_improve_training_data():
     """Load training data and apply feature improvements."""
-    print("📂 Loading training data...")
+    print("[LOAD] Loading training data...")
     
     # Load training files
     train_files = ["training_data/train3.xlsx", "training_data/train6.xlsx"]
@@ -80,23 +80,23 @@ def load_and_improve_training_data():
     
     return train_improved
 
-def load_and_improve_validation_data():
-    """Load validation data and apply feature improvements."""
-    print("📂 Loading validation data...")
+def load_and_improve_test_data():
+    """Load test data and apply feature improvements."""
+    print("[LOAD] Loading test data...")
     
-    # Load validation files
+    # Load test files from data_for_classification folder
     val3 = pd.read_excel('data_for_classification/val3.xlsx')
     val6 = pd.read_excel('data_for_classification/val6.xlsx')
-    val_df = pd.concat([val3, val6], ignore_index=True)
+    test_df = pd.concat([val3, val6], ignore_index=True)
     
-    print(f"✓ Loaded validation data: {val_df.shape}")
+    print(f"✓ Loaded test data: {test_df.shape}")
     
     # Apply improvements
-    val_improved = create_improved_features(val_df)
+    test_improved = create_improved_features(test_df)
     
-    return val_improved
+    return test_improved
 
-def analyze_feature_improvements(train_df, val_df):
+def analyze_feature_improvements(train_df, test_df):
     """Analyze how the new features perform."""
     print("\n🔍 ANALYZING FEATURE IMPROVEMENTS")
     print("="*50)
@@ -119,16 +119,16 @@ def analyze_feature_improvements(train_df, val_df):
     X_train = train_df[feature_columns].fillna(train_df[feature_columns].median())
     y_train = train_df['type']
     
-    X_val = val_df[feature_columns].fillna(val_df[feature_columns].median())
-    y_val = val_df['type']
+    X_test = test_df[feature_columns].fillna(test_df[feature_columns].median())
+    y_test = test_df['type']
     
     # Scale features
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
-    X_val_scaled = scaler.transform(X_val)
+    X_test_scaled = scaler.transform(X_test)
     
     X_train_scaled = pd.DataFrame(X_train_scaled, columns=feature_columns)
-    X_val_scaled = pd.DataFrame(X_val_scaled, columns=feature_columns)
+    X_test_scaled = pd.DataFrame(X_test_scaled, columns=feature_columns)
     
     # Feature selection with more features
     print(f"\n🎯 Feature Selection Analysis")
@@ -159,7 +159,7 @@ def analyze_feature_improvements(train_df, val_df):
 
 def create_feature_importance_comparison():
     """Compare original vs improved feature importance."""
-    print(f"\n📊 Creating feature importance comparison...")
+    print(f"\n[ANALYSIS] Creating feature importance comparison...")
     
     # Load original model for comparison
     models_dir = Path("models")
@@ -182,25 +182,25 @@ def create_feature_importance_comparison():
                 print(f"  {i+1:2d}. {row['feature']:30} {row['importance']:.4f}")
                 
         except Exception as e:
-            print(f"⚠️  Could not load original model: {e}")
+            print(f"[WARNING] Could not load original model: {e}")
 
 def suggest_model_improvements():
     """Suggest specific model training improvements."""
-    print(f"\n🚀 SUGGESTED IMPROVEMENTS")
+    print(f"\n[RECOMMENDATIONS] SUGGESTED IMPROVEMENTS")
     print("="*50)
     
     print(f"""
-1. 🎯 TARGETED FEATURE ENGINEERING:
+1. [TARGET] TARGETED FEATURE ENGINEERING:
    • Use new Shape_Complexity instead of raw Extent
    • Replace Circularity with Comprehensive_Shape  
    • Add Class4_Discriminator for Class 4 vs Class 1 separation
    
-2. 📊 RETRAIN WITH MORE FEATURES:
+2. [RETRAIN] RETRAIN WITH MORE FEATURES:
    • Increase --max-features from 15 to 20-25
    • Include the new engineered features
    • Use feature selection to pick the best combination
 
-3. 🔧 MODEL ARCHITECTURE ADJUSTMENTS:
+3. [MODEL] MODEL ARCHITECTURE ADJUSTMENTS:
    • Class 4 specific: Use class weights to boost Class 4 performance
    • Try ensemble methods (multiple models for different class pairs)
    • Consider tree-based features interactions
@@ -229,10 +229,10 @@ def main():
     try:
         # Load and improve data
         train_improved = load_and_improve_training_data()
-        val_improved = load_and_improve_validation_data()
+        test_improved = load_and_improve_test_data()
         
         # Analyze improvements
-        analyze_feature_improvements(train_improved, val_improved)
+        analyze_feature_improvements(train_improved, test_improved)
         
         # Compare with original
         create_feature_importance_comparison()
@@ -242,13 +242,13 @@ def main():
         
         # Save improved datasets
         train_improved.to_excel('training_data/train_improved.xlsx', index=False)
-        val_improved.to_excel('validation_data_improved.xlsx', index=False)
+        test_improved.to_excel('test_data_improved.xlsx', index=False)
         
-        print(f"\n✅ Feature engineering complete!")
+        print(f"\n[SUCCESS] Feature engineering complete!")
         print(f"✓ Saved improved training data: training_data/train_improved.xlsx")
-        print(f"✓ Saved improved validation data: validation_data_improved.xlsx")
+        print(f"✓ Saved improved test data: test_data_improved.xlsx")
         
-        print(f"\n🎯 NEXT STEPS:")
+        print(f"\n[NEXT] NEXT STEPS:")
         print(f"1. Run: python excel_xgboost_classifier.py --files training_data/train_improved.xlsx --max-features 25")
         print(f"2. Test on validation data using the new model")
         print(f"3. Compare results with original model")

@@ -828,6 +828,18 @@ The classification component is designed to work with particle measurement data 
 
 # Automated Training & Validation Pipeline
 
+## Enhanced Features
+
+- **Advanced Feature Engineering**: 9 new engineered features to improve classification accuracy
+- **Clustering-Based Model Enhancement**: Uses KMeans clustering to identify error-prone regions and creates 8 cluster-aware features
+- **Ensemble Learning**: Combines multiple models (XGBoost Enhanced, Random Forest Enhanced, XGBoost Conservative) with soft voting
+- **Smart Data Augmentation**: Applies SMOTEENN resampling focused on confused class pairs (especially Class 1 vs Class 4)
+- **Comprehensive Validation**: Tests on ALL datasets in `data_for_classification/` with detailed metrics and visualizations
+- **Enhanced Logging System**: Comprehensive logging with TeeLogger class that captures all terminal output to timestamped log files
+- **Results-Only Model Saving**: Enhanced models save only to results directory to avoid duplication
+- **Windows Compatibility**: Emoji-free output using bracket notation for cross-platform compatibility
+- **Direct Method Processing**: Refactored validation script generation to use direct method calls for better debugging
+
 ## Overview
 
 The pipeline now includes a fully automated end-to-end training, validation, and reporting workflow for precipitation data classification. This is orchestrated by `autorun_training.py` and associated scripts. The workflow covers:
@@ -837,6 +849,24 @@ The pipeline now includes a fully automated end-to-end training, validation, and
 - Automated validation on **all** datasets in `data_for_classification/` (not just val3/val6)
 - Comprehensive, publication-ready visualizations
 - Timestamped results folders for reproducibility
+- **Comprehensive logging** with all terminal output captured to timestamped log files
+
+## Quick Start
+
+1. **Prepare your data**: Place Excel files in appropriate directories:
+   - Training data: `training_data/` (e.g., train3.xlsx, train6.xlsx)
+   - Test/validation data: `data_for_classification/` (e.g., val3.xlsx, val6.xlsx, etc.)
+
+2. **Run the automated pipeline**:
+   ```bash
+   python autorun_training.py
+   ```
+
+3. **Check results**: Look in the timestamped results folder (e.g., `results_20240115_143022/`) for:
+   - Enhanced model: `models/enhanced_ensemble_model.joblib`
+   - Validation plots: `plots/enhanced_model_validation_results.png`
+   - Performance report: `reports/training_pipeline_report.txt`
+   - **Comprehensive logs**: `logs/` directory with timestamped logs for all operations
 
 ## How It Works
 
@@ -851,6 +881,87 @@ The pipeline now includes a fully automated end-to-end training, validation, and
 3. **Validation is fully automated**:
    - Every Excel file in `data_for_classification/` is processed and evaluated.
    - No need to manually specify validation files; new files are automatically included.
+4. **All terminal output is logged**: Comprehensive logging captures all output to timestamped files for debugging and record-keeping.
+
+## Pipeline Components
+
+### 1. Feature Engineering (`improve_features.py`)
+Creates 9 new engineered features:
+- **Shape_Complexity**: Measures shape intricacy combining normalized extent and circularity
+- **Area_Perimeter_Ratio**: Normalized compactness measure
+- **Convex_Efficiency**: Efficiency of shape filling its convex hull
+- **Eccentricity_Robust**: Clipped eccentricity to handle outliers
+- **Distance_Ratio**: Ratio of raw to normalized distance
+- **Distance_Interaction**: Interaction between distances
+- **Intensity_Stability**: Stability of intensity relative to variance
+- **Comprehensive_Shape**: Combined shape metric
+- **Class4_Discriminator**: Feature to separate Class 4 from Class 1
+
+**Note**: Files are correctly named with `test_data_improved.xlsx` (not validation) since this data comes from the `data_for_classification/` folder which contains test datasets.
+
+### 2. Enhanced Model Training (`improve_model_with_clustering.py`)
+- **Clustering Analysis**: Uses KMeans with 2 clusters to identify error-prone regions
+- **8 Cluster-Aware Features**:
+  - Distance to cluster centers (2 features)
+  - Cluster membership probabilities (2 features) 
+  - Class 4 vs Class 1 discriminators (3 features)
+  - High-error region indicator (1 feature)
+- **Targeted Resampling**: Applies SMOTEENN to balance classes
+- **Ensemble Model**: Soft-voting ensemble of 3 models with different hyperparameters
+- **Results-Only Saving**: Enhanced models save only to results directory to avoid duplication
+
+### 3. Comprehensive Validation Testing
+- Tests enhanced model on **all test datasets** in `data_for_classification/`
+- Generates individual performance plots for each dataset
+- Creates comprehensive overview plot combining all results
+- Computes detailed metrics: accuracy, precision, recall, F1, confidence statistics
+- **Direct Method Processing**: Uses direct class method calls instead of dynamic script generation for better debugging
+
+### 4. Automated Pipeline (`autorun_training.py`)
+- **Data Discovery**: Automatically finds and validates Excel files
+- **Sequential Processing**: Runs feature engineering → model training → validation testing
+- **Results Management**: Creates timestamped output directories
+- **Report Generation**: Comprehensive text reports with all metrics and analysis
+- **Enhanced Logging**: Comprehensive logging system with TeeLogger class captures all terminal output
+- **Windows Compatibility**: Uses bracket notation (e.g., [START], [SUCCESS]) instead of emojis for cross-platform compatibility
+
+### Individual Scripts
+
+#### `improve_features.py`
+Standalone feature engineering script:
+```bash
+python improve_features.py
+```
+Generates `train_improved.xlsx` and `test_data_improved.xlsx` (correctly named for test data)
+
+#### `improve_model_with_clustering.py`
+Enhanced model training with clustering:
+```bash
+python improve_model_with_clustering.py
+```
+Requires existing base model components in `models/` directory
+
+#### `create_simple_train_test_plot.py`
+Create training vs test performance visualization:
+```bash
+python create_simple_train_test_plot.py
+```
+Generates `train_test_performance.png` with Windows-compatible output formatting
+
+## Key Improvements Over Standard Approach
+
+1. **Cluster-Aware Feature Engineering**: Identifies and targets error-prone regions
+2. **Ensemble Learning**: Combines multiple model strategies for robust predictions
+3. **Class-Specific Optimization**: Focuses on Class 4 vs Class 1 confusion (main error source)
+4. **Comprehensive Validation**: Tests on all available datasets with detailed analysis
+5. **Automated Pipeline**: End-to-end automation with proper results management
+6. **Advanced Resampling**: Uses SMOTEENN for intelligent data augmentation
+7. **Feature Selection**: Automatically selects most informative features
+8. **Enhanced Logging System**: Comprehensive logging with TeeLogger class captures all terminal output to timestamped files
+9. **Results-Only Model Saving**: Enhanced models save only to results directory to avoid duplication in base models folder
+10. **Direct Method Processing**: Refactored validation processing from dynamic script generation to direct method calls for better debugging
+11. **Cross-Platform Compatibility**: Windows-compatible output using bracket notation instead of emojis
+12. **Improved File Naming**: Clear distinction between training, test, and validation data with appropriate file names
 
 ## Validation Visualizations
 
@@ -876,11 +987,16 @@ All outputs are saved in the timestamped results folder:
 - **models/**: Enhanced ensemble model, cluster model, scaler, selector, and metadata
 - **plots/**:
   - `enhanced_model_validation_results.png` (overview for all validation datasets)
-  - `enhanced_model_<dataset>_results.png` (individual plots for each validation set)
+  - `enhanced_model_<dataset>_results.png` (individual plots for each validation set; one for every validation file, automatically discovered)
   - `train_test_performance.png` (train/test split performance)
 - **reports/**: Pipeline report, test results Excel, predictions for each validation set
 - **data/**: Improved train and validation datasets
-- **logs/**: Any log files (if generated)
+- **logs/** - **Comprehensive logging output**:
+  - `feature_engineering_YYYYMMDD_HHMMSS.log` - Feature engineering process logs
+  - `model_training_YYYYMMDD_HHMMSS.log` - Model training logs
+  - `validation_testing_YYYYMMDD_HHMMSS.log` - Validation testing logs
+  - `train_test_plotting_YYYYMMDD_HHMMSS.log` - Plotting process logs
+  - Corresponding `_errors.log` files for any error output
 
 **Note:** Plots are only saved to file and are not displayed interactively.
 
