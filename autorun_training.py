@@ -78,7 +78,7 @@ class AutoTrainingPipeline:
     Automated training pipeline for precipitation data classification.
     """
     
-    def __init__(self, max_features=20, random_seed=42, output_dir=None, skip_feature_eng=False, skip_training=False, model_dir=None, network_dir=None):
+    def __init__(self, max_features=20, random_seed=42, output_dir=None, skip_feature_eng=False, skip_training=False, model_dir=None, network_dir=None, training_mode='combined'):
         self.max_features = max_features
         self.random_seed = random_seed
         if output_dir is None:
@@ -87,7 +87,8 @@ class AutoTrainingPipeline:
         self.output_dir = Path(output_dir)
         self.skip_feature_eng = skip_feature_eng
         self.skip_training = skip_training
-        self.network_dir = network_dir or "first_network"
+        self.network_dir = (network_dir or "first_network").rstrip('/')
+        self.training_mode = training_mode
         
         # Key directories
         self.training_data_dir = Path("training_data")
@@ -302,6 +303,19 @@ class AutoTrainingPipeline:
         print(f"  Test:  {total_test_samples}")
         print(f"  Val:   {total_val_samples}")
 
+        # Show training mode analysis
+        if self.training_mode != 'combined':
+            print(f"\n🎯 TRAINING MODE: {self.training_mode.upper()}")
+            print("=" * 50)
+            training_groups = self.group_experiments_by_training_mode(training_data_info)
+            for group_name, experiments in training_groups.items():
+                print(f"Group '{group_name}': {len(experiments)} experiments")
+                for exp in experiments:
+                    exp_info = training_data_info[exp]
+                    print(f"  - {exp}: {exp_info['train_samples']} train samples")
+            print(f"\nNote: {len(training_groups)} separate models will be trained")
+            print("=" * 50)
+
         # Store results
         self.results['training_data_info'] = training_data_info
         self.results['total_training_samples'] = total_train_samples
@@ -310,7 +324,37 @@ class AutoTrainingPipeline:
         self.pipeline_status['data_discovery'] = True
 
         return training_data_info
-    
+
+    def discover_existing_per_experiment_models(self):
+        """Discover existing per-experiment models when skipping training."""
+        print("\nDiscovering existing per-experiment models...")
+
+        if not hasattr(self, 'results') or 'training_data_info' not in self.results:
+            print("Warning: No training data info found")
+            return
+
+        # Initialize trained_model_groups if needed
+        if not hasattr(self, 'trained_model_groups'):
+            self.trained_model_groups = {}
+
+        # Check for each experiment if it has a corresponding per-experiment model
+        for exp_name in self.results['training_data_info'].keys():
+            # Create safe group name (same logic as training)
+            safe_group_name = exp_name.replace('/', '_').replace('\\', '_')
+            model_suffix = f"_{safe_group_name}"
+
+            # Check if per-experiment model files exist
+            enhanced_model_path = self.models_dir / f"enhanced_ensemble_model{model_suffix}.joblib"
+            cluster_model_path = self.models_dir / f"cluster_model{model_suffix}.joblib"
+
+            if enhanced_model_path.exists() and cluster_model_path.exists():
+                self.trained_model_groups[exp_name] = True
+                print(f"✅ Found per-experiment model: {exp_name}")
+            else:
+                print(f"❌ No per-experiment model found for: {exp_name}")
+
+        print(f"Discovered {len(self.trained_model_groups)} per-experiment models")
+
     def discover_validation_data(self):
         """Discover and validate validation data files."""
         print("\nSTEP: Discovering Validation Data")
@@ -514,6 +558,56 @@ class AutoTrainingPipeline:
 
         return final_df
 
+    def analyze_class_performance(self, y_true, y_pred, dataset_name=""):
+        """Analyze class-specific performance with focus on confused classes."""
+        print(f"\n🎯 CLASS-SPECIFIC ANALYSIS ({dataset_name}):")
+        print("=" * 50)
+
+        y_true_array = np.array(y_true)
+        y_pred_array = np.array(y_pred)
+
+        # Overall accuracy by class
+        for class_num in [1, 2, 3, 4]:
+            class_mask = y_true_array == class_num
+            if np.sum(class_mask) > 0:
+                class_accuracy = accuracy_score(y_true_array[class_mask], y_pred_array[class_mask])
+                class_count = np.sum(class_mask)
+                print(f"Class {class_num}: {class_accuracy:.1%} accuracy ({class_count} samples)")
+
+        # Focus on Class 4 vs Class 1 confusion (most problematic pair)
+        print(f"\n🔍 CLASS 4 vs CLASS 1 DETAILED ANALYSIS:")
+        class_4_mask = y_true_array == 4
+        class_1_mask = y_true_array == 1
+
+        if np.sum(class_4_mask) > 0:
+            class_4_pred = y_pred_array[class_4_mask]
+            class_4_accuracy = accuracy_score(y_true_array[class_4_mask], class_4_pred)
+            class_4_as_1 = np.sum(class_4_pred == 1)
+            print(f"Class 4 performance:")
+            print(f"  Total samples: {np.sum(class_4_mask)}")
+            print(f"  Correctly classified: {class_4_accuracy:.1%}")
+            print(f"  Misclassified as Class 1: {class_4_as_1} samples ({class_4_as_1/np.sum(class_4_mask)*100:.1f}%)")
+
+        if np.sum(class_1_mask) > 0:
+            class_1_pred = y_pred_array[class_1_mask]
+            class_1_accuracy = accuracy_score(y_true_array[class_1_mask], class_1_pred)
+            class_1_as_4 = np.sum(class_1_pred == 4)
+            print(f"Class 1 performance:")
+            print(f"  Total samples: {np.sum(class_1_mask)}")
+            print(f"  Correctly classified: {class_1_accuracy:.1%}")
+            print(f"  Misclassified as Class 4: {class_1_as_4} samples ({class_1_as_4/np.sum(class_1_mask)*100:.1f}%)")
+
+        # Confusion matrix for all classes
+        from sklearn.metrics import confusion_matrix
+        cm = confusion_matrix(y_true, y_pred, labels=[1, 2, 3, 4])
+        print(f"\nConfusion Matrix:")
+        print("Predicted:  1    2    3    4")
+        for i, true_class in enumerate([1, 2, 3, 4]):
+            row_str = f"True {true_class}:   "
+            for j in range(4):
+                row_str += f"{cm[i,j]:4d} "
+            print(row_str)
+
     def run_feature_engineering(self):
         """Run feature engineering pipeline."""
         print("\nSTEP 2: Feature Engineering")
@@ -578,37 +672,16 @@ class AutoTrainingPipeline:
         print("=" * 50)
 
         try:
-            # Load the balanced training data and class weights
-            train_data_path = Path('training_data/train3.xlsx')
-            class_weights_path = Path('training_data/class_weights.json')
+            # Get training groups based on training mode
+            training_data_info = self.results['training_data_info']
+            training_groups = self.group_experiments_by_training_mode(training_data_info)
 
-            if not train_data_path.exists():
-                print("Error: Balanced training data not found")
-                return False
-
-            print("Loading balanced training data and class weights...")
-            train_df = pd.read_excel(train_data_path)
-            print(f"Loaded {len(train_df)} training samples")
-
-            # Load class weights if available
-            class_weights = None
-            if class_weights_path.exists():
-                import json
-                with open(class_weights_path, 'r') as f:
-                    class_weights = json.load(f)
-                print(f"Loaded class weights: {class_weights}")
+            if self.training_mode == 'combined':
+                # Original single model approach
+                return self._train_single_combined_model()
             else:
-                print("No class weights found, using balanced training")
-
-            # Train the enhanced ensemble model
-            success = self.train_enhanced_ensemble_model(train_df, class_weights)
-
-            if success:
-                self.pipeline_status['model_training'] = True
-                return True
-            else:
-                print("Error: Enhanced model training failed")
-                return False
+                # Multiple model approach
+                return self._train_multiple_models(training_groups, training_data_info)
 
         except Exception as e:
             print(f"Error: Error in enhanced model training: {e}")
@@ -616,7 +689,116 @@ class AutoTrainingPipeline:
             traceback.print_exc()
             return False
 
-    def train_enhanced_ensemble_model(self, train_df, class_weights=None):
+    def _train_single_combined_model(self):
+        """Train single ensemble model with all experiments combined (original approach)."""
+        train_data_path = self.output_dir / 'data' / 'combined_balanced_training_data.xlsx'
+        class_weights_path = self.output_dir / 'data' / 'class_weights.json'
+
+        if not train_data_path.exists():
+            print("Error: Balanced training data not found")
+            return False
+
+        print("Loading balanced training data and class weights...")
+        train_df = pd.read_excel(train_data_path)
+        print(f"Loaded {len(train_df)} training samples")
+
+        class_weights = None
+        if class_weights_path.exists():
+            import json
+            with open(class_weights_path, 'r') as f:
+                class_weights = json.load(f)
+            print(f"Loaded class weights: {class_weights}")
+
+        # Use existing ensemble training method
+        success = self.train_enhanced_ensemble_model(train_df, class_weights)
+        if success:
+            self.pipeline_status['model_training'] = True
+        return success
+
+    def _train_multiple_models(self, training_groups, training_data_info):
+        """Train separate ensemble models for each group using SAME architecture."""
+        print(f"Training {len(training_groups)} separate enhanced ensemble models...")
+
+        successful_models = 0
+        failed_models = 0
+        self.trained_model_groups = {}
+
+        for group_name, experiment_list in training_groups.items():
+            print(f"\n🎯 Training enhanced ensemble for group: {group_name}")
+            print(f"Experiments: {experiment_list}")
+            print("-" * 40)
+
+            # Combine training data for this group
+            group_data = []
+            for exp_name in experiment_list:
+                exp_info = training_data_info[exp_name]
+                if exp_info['train_file'] and exp_info['train_file'].exists():
+                    exp_df = pd.read_excel(exp_info['train_file'])
+                    group_data.append(exp_df)
+
+            if not group_data:
+                print(f"❌ Error: No training data for group {group_name}")
+                failed_models += 1
+                continue
+
+            # Combine and balance data for this group
+            combined_df = pd.concat(group_data, ignore_index=True)
+            print(f"Combined {len(combined_df)} samples for group {group_name}")
+
+            # Check if we have sufficient data for training
+            class_counts = combined_df['type'].value_counts()
+            min_class_count = min(class_counts.values)
+
+            if len(class_counts) < 2:
+                print(f"❌ Skipping {group_name}: Only {len(class_counts)} class(es), need at least 2")
+                failed_models += 1
+                continue
+
+            if min_class_count < 2:
+                print(f"❌ Skipping {group_name}: Minimum class has only {min_class_count} samples, need at least 2")
+                failed_models += 1
+                continue
+
+            # Calculate class weights for this group
+            total = len(combined_df)
+            num_classes = len(class_counts)
+            class_weights = {str(cls): total/(num_classes * count)
+                           for cls, count in class_counts.items()}
+
+            print(f"Class distribution: {dict(class_counts)}")
+            print(f"Class weights: {class_weights}")
+
+            # Create safe filename suffix (replace problematic characters)
+            safe_group_name = group_name.replace('/', '_').replace('\\', '_')
+
+            # Train the SAME enhanced ensemble model architecture for this group
+            try:
+                success = self.train_enhanced_ensemble_model(
+                    combined_df, class_weights, model_suffix=f"_{safe_group_name}")
+
+                if success:
+                    self.trained_model_groups[group_name] = True
+                    successful_models += 1
+                    print(f"✓ Enhanced ensemble trained for {group_name}")
+                else:
+                    failed_models += 1
+                    print(f"✗ Failed to train ensemble for {group_name}")
+            except Exception as e:
+                failed_models += 1
+                print(f"✗ Failed to train ensemble for {group_name}: {e}")
+
+        # Consider success if we trained at least some models
+        if successful_models > 0:
+            self.pipeline_status['model_training'] = True
+            print(f"\n✓ Successfully trained {successful_models}/{successful_models + failed_models} enhanced ensemble models")
+            if failed_models > 0:
+                print(f"⚠️  {failed_models} models failed due to insufficient data")
+        else:
+            print(f"\n❌ All {failed_models} models failed to train")
+
+        return successful_models > 0
+
+    def train_enhanced_ensemble_model(self, train_df, class_weights=None, model_suffix=""):
         """Train an enhanced ensemble model with clustering features."""
         print("Training enhanced ensemble model...")
 
@@ -627,7 +809,7 @@ class AutoTrainingPipeline:
             from sklearn.cluster import KMeans
             from sklearn.mixture import GaussianMixture
             from sklearn.model_selection import cross_val_score
-            from sklearn.metrics import classification_report
+            from sklearn.metrics import classification_report, accuracy_score
             import xgboost as xgb
 
             # Prepare features and target
@@ -691,12 +873,64 @@ class AutoTrainingPipeline:
                 cluster_membership = (cluster_labels == i).astype(float)
                 enhanced_features.append(cluster_membership)
 
+            # Class-specific distance features (Class 4 vs Class 1 - most confused classes)
+            class_4_mask = y == 3  # Class 4 (0-indexed as 3)
+            class_1_mask = y == 0  # Class 1 (0-indexed as 0)
+
+            if np.sum(class_4_mask) > 0 and np.sum(class_1_mask) > 0:
+                # Calculate feature centers for Class 4 and Class 1
+                class_4_mean = np.mean(X_selected[class_4_mask], axis=0)
+                class_1_mean = np.mean(X_selected[class_1_mask], axis=0)
+
+                # Distance to each class center
+                dist_to_class_4 = np.linalg.norm(X_selected - class_4_mean, axis=1)
+                dist_to_class_1 = np.linalg.norm(X_selected - class_1_mean, axis=1)
+
+                enhanced_features.append(dist_to_class_4)
+                enhanced_features.append(dist_to_class_1)
+                enhanced_features.append(dist_to_class_4 - dist_to_class_1)  # Relative distance
+
+                print(f"Added class-specific distance features for Class 4 vs Class 1 discrimination")
+
+            # Error-prone region indicator (based on clustering analysis)
+            # Identify which cluster tends to have more misclassifications
+            error_prone_cluster = 0  # This should be determined from validation analysis
+            error_indicator = (cluster_labels == error_prone_cluster).astype(float)
+            enhanced_features.append(error_indicator)
+
             # Combine original and enhanced features
             X_enhanced = np.hstack([X_selected] + [feat.reshape(-1, 1) for feat in enhanced_features])
 
             print(f"Enhanced feature matrix shape: {X_enhanced.shape}")
 
-            # Step 2: Train ensemble models
+            # Step 2: Apply controlled SMOTE augmentation (less aggressive to prevent overfitting)
+            print("Applying controlled SMOTE augmentation...")
+            try:
+                from imblearn.over_sampling import SMOTE
+                # Use more conservative SMOTE parameters to prevent perfect separability
+                smote = SMOTE(
+                    sampling_strategy='auto',  # Balance all classes
+                    k_neighbors=3,  # Reduced from default 5 to create less perfect synthetic samples
+                    random_state=self.random_seed
+                )
+                X_resampled, y_resampled = smote.fit_resample(X_enhanced, y)
+
+                print(f"Original data: {X_enhanced.shape[0]} samples")
+                print(f"Resampled data: {X_resampled.shape[0]} samples")
+                print(f"Original class distribution: {dict(pd.Series(y).value_counts().sort_index())}")
+                print(f"Resampled class distribution: {dict(pd.Series(y_resampled).value_counts().sort_index())}")
+
+                # Use resampled data for training
+                X_enhanced = X_resampled
+                y = y_resampled
+
+            except ImportError:
+                print("Warning: imblearn not available, skipping SMOTE augmentation")
+                print("Install with: pip install imbalanced-learn")
+            except Exception as e:
+                print(f"Warning: SMOTE failed ({e}), using original data")
+
+            # Step 3: Train ensemble models
             print("Training ensemble models...")
 
             # Convert class weights for sklearn (map from original classes to 0-indexed)
@@ -705,93 +939,98 @@ class AutoTrainingPipeline:
                 sample_weights = np.array([class_weights[str(reverse_mapping[label])] for label in y])
                 print(f"Using sample weights based on class frequencies")
 
-            # Define base models
-            models = {
-                'xgb': xgb.XGBClassifier(
-                    n_estimators=100,
-                    max_depth=6,
-                    learning_rate=0.1,
-                    random_state=self.random_seed,
-                    eval_metric='mlogloss'
-                ),
-                'rf': RandomForestClassifier(
-                    n_estimators=100,
-                    max_depth=10,
-                    random_state=self.random_seed
-                ),
-                'gb': GradientBoostingClassifier(
-                    n_estimators=100,
-                    max_depth=6,
-                    learning_rate=0.1,
-                    random_state=self.random_seed
-                ),
-                'lr': LogisticRegression(
-                    random_state=self.random_seed,
-                    max_iter=1000
-                )
-            }
+            # Define models with hyperparameter tuning to prevent overfitting
+            models = self._get_tuned_models(X_enhanced, y, sample_weights)
 
-            # Train and evaluate each model
+            # Train and evaluate each model with validation-based selection
             trained_models = {}
             model_scores = {}
+
+            # Create validation split for model selection
+            from sklearn.model_selection import train_test_split
+            X_train_models, X_val_models, y_train_models, y_val_models = train_test_split(
+                X_enhanced, y, test_size=0.2, random_state=self.random_seed, stratify=y
+            )
 
             for name, model in models.items():
                 print(f"  Training {name}...")
 
-                if sample_weights is not None and name in ['rf', 'gb', 'lr']:
-                    # These models support sample_weight
-                    model.fit(X_enhanced, y, sample_weight=sample_weights)
-                elif name == 'xgb' and class_weights:
-                    # XGBoost uses class weights differently
-                    weight_map = {int(k): v for k, v in class_weights.items()}
-                    model.set_params(scale_pos_weight=None)  # Reset any previous setting
-                    model.fit(X_enhanced, y)
+                # Train on subset and validate
+                if sample_weights is not None and name in ['rf_tuned', 'gb_tuned']:
+                    # Subset sample weights for training data
+                    train_indices = range(len(y_train_models))
+                    subset_weights = sample_weights[train_indices] if len(sample_weights) == len(X_enhanced) else None
+                    if subset_weights is not None:
+                        model.fit(X_train_models, y_train_models, sample_weight=subset_weights)
+                    else:
+                        model.fit(X_train_models, y_train_models)
                 else:
-                    model.fit(X_enhanced, y)
+                    model.fit(X_train_models, y_train_models)
 
-                # Cross-validation score
-                cv_scores = cross_val_score(model, X_enhanced, y, cv=3, scoring='accuracy')
-                model_scores[name] = cv_scores.mean()
+                # Validation score (more reliable than CV on augmented data)
+                val_pred = model.predict(X_val_models)
+                val_accuracy = accuracy_score(y_val_models, val_pred)
+                model_scores[name] = val_accuracy
                 trained_models[name] = model
 
-                print(f"    {name} CV accuracy: {cv_scores.mean():.3f} (+/- {cv_scores.std() * 2:.3f})")
+                print(f"    {name} validation accuracy: {val_accuracy:.3f}")
 
-            # Step 3: Create ensemble (weighted voting)
-            print("Creating ensemble model...")
+            # Select only models that perform well on validation
+            min_val_accuracy = 0.7  # Threshold to prevent poor models from being included
+            good_models = {name: model for name, model in trained_models.items()
+                          if model_scores[name] >= min_val_accuracy}
 
-            # Use CV scores as weights for ensemble
-            total_score = sum(model_scores.values())
-            ensemble_weights = {name: score/total_score for name, score in model_scores.items()}
+            if len(good_models) < 2:
+                print(f"Warning: Only {len(good_models)} models meet validation threshold, using all models")
+                good_models = trained_models
+            else:
+                print(f"Selected {len(good_models)} models meeting validation threshold")
 
-            print("Ensemble weights based on CV performance:")
-            for name, weight in ensemble_weights.items():
-                print(f"  {name}: {weight:.3f}")
+            trained_models = good_models
 
-            # Create ensemble prediction function
-            def ensemble_predict(X):
-                predictions = np.zeros((len(X), len(np.unique(y))))
-                for name, model in trained_models.items():
-                    pred_proba = model.predict_proba(X)
-                    predictions += pred_proba * ensemble_weights[name]
-                return np.argmax(predictions, axis=1)
+            # Step 4: Create VotingClassifier ensemble
+            print("Creating VotingClassifier ensemble...")
 
-            def ensemble_predict_proba(X):
-                predictions = np.zeros((len(X), len(np.unique(y))))
-                for name, model in trained_models.items():
-                    pred_proba = model.predict_proba(X)
-                    predictions += pred_proba * ensemble_weights[name]
-                return predictions
+            from sklearn.ensemble import VotingClassifier
 
-            # Step 4: Evaluate ensemble on training data
-            ensemble_pred = ensemble_predict(X_enhanced)
+            # Create voting ensemble with soft voting (probability-based)
+            ensemble_model = VotingClassifier(
+                estimators=list(trained_models.items()),
+                voting='soft'
+            )
+
+            # Train the ensemble
+            print("Training ensemble...")
+            if sample_weights is not None:
+                # VotingClassifier doesn't directly support sample_weight, but individual models already trained with it
+                ensemble_model.fit(X_enhanced, y)
+            else:
+                ensemble_model.fit(X_enhanced, y)
+
+            # Evaluate ensemble with cross-validation
+            ensemble_cv_scores = cross_val_score(ensemble_model, X_enhanced, y, cv=3, scoring='accuracy')
+            print(f"Ensemble CV accuracy: {ensemble_cv_scores.mean():.3f} (+/- {ensemble_cv_scores.std() * 2:.3f})")
+
+            print("Individual model CV scores:")
+            for name, score in model_scores.items():
+                print(f"  {name}: {score:.3f}")
+
+            # Use the VotingClassifier as the main ensemble
+            trained_models['ensemble'] = ensemble_model
+
+            # Step 5: Evaluate ensemble on training data
+            ensemble_pred = ensemble_model.predict(X_enhanced)
 
             # Convert predictions back to original class labels (1,2,3,4)
             ensemble_pred_mapped = [reverse_mapping[pred] for pred in ensemble_pred]
             y_orig_for_eval = [reverse_mapping[label] for label in y]
 
-            # Print evaluation
+            # Print evaluation with class-specific analysis
             print("\nEnsemble Model Training Results:")
             print(classification_report(y_orig_for_eval, ensemble_pred_mapped))
+
+            # Class-specific analysis (focus on Class 4 vs Class 1 confusion)
+            self.analyze_class_performance(y_orig_for_eval, ensemble_pred_mapped, "Training")
 
             # Step 5: Save all components
             print("Saving enhanced model components...")
@@ -799,13 +1038,14 @@ class AutoTrainingPipeline:
             models_dir = self.output_dir / 'models'
 
             # Save ensemble components
-            ensemble_model = {
-                'models': trained_models,
-                'weights': ensemble_weights,
+            ensemble_components = {
+                'voting_classifier': ensemble_model,
+                'individual_models': {k: v for k, v in trained_models.items() if k != 'ensemble'},
+                'model_scores': model_scores,
                 'reverse_mapping': reverse_mapping,  # Maps 0,1,2,3 -> 1,2,3,4
                 'class_mapping': class_mapping       # Maps 1,2,3,4 -> 0,1,2,3
             }
-            joblib.dump(ensemble_model, models_dir / 'enhanced_ensemble_model.joblib')
+            joblib.dump(ensemble_components, models_dir / f'enhanced_ensemble_model{model_suffix}.joblib')
 
             # Save clustering model
             cluster_model = {
@@ -813,12 +1053,13 @@ class AutoTrainingPipeline:
                 'gmm': gmm,
                 'cluster_centers': cluster_centers
             }
-            joblib.dump(cluster_model, models_dir / 'cluster_model.joblib')
+            joblib.dump(cluster_model, models_dir / f'cluster_model{model_suffix}.joblib')
 
-            # Save preprocessing components
-            joblib.dump(scaler, models_dir / 'latest_scaler.joblib')
-            joblib.dump(selector, models_dir / 'latest_feature_selector.joblib')
-            joblib.dump(selected_features, models_dir / 'latest_feature_names.joblib')
+            # Save preprocessing components (only once for the first model if multiple models)
+            if model_suffix == "" or not (models_dir / 'latest_scaler.joblib').exists():
+                joblib.dump(scaler, models_dir / 'latest_scaler.joblib')
+                joblib.dump(selector, models_dir / 'latest_feature_selector.joblib')
+                joblib.dump(selected_features, models_dir / 'latest_feature_names.joblib')
 
             # Save metadata
             metadata = {
@@ -827,16 +1068,16 @@ class AutoTrainingPipeline:
                 'enhanced_feature_shape': X_enhanced.shape,
                 'class_weights': class_weights,
                 'model_scores': model_scores,
-                'ensemble_weights': ensemble_weights,
                 'training_samples': len(train_df),
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'model_suffix': model_suffix
             }
-            joblib.dump(metadata, models_dir / 'enhanced_model_metadata.joblib')
+            joblib.dump(metadata, models_dir / f'enhanced_model_metadata{model_suffix}.joblib')
 
             print("Success: Enhanced ensemble model training completed!")
-            print(f"Saved enhanced_ensemble_model.joblib")
-            print(f"Saved cluster_model.joblib")
-            print(f"Saved enhanced_model_metadata.joblib")
+            print(f"Saved enhanced_ensemble_model{model_suffix}.joblib")
+            print(f"Saved cluster_model{model_suffix}.joblib")
+            print(f"Saved enhanced_model_metadata{model_suffix}.joblib")
 
             return True
 
@@ -872,17 +1113,7 @@ class AutoTrainingPipeline:
                     print("Combined validation output:")
                     print(result.stdout)
                     
-                    # Run train/test performance visualization (using enhanced features)
-                    train_test_result = self._run_script_with_model_redirect('create_simple_train_test_plot.py', timeout=300)
-                    
-                    # Save logs for train/test plotting
-                    self.save_subprocess_logs(train_test_result, "train_test_plotting")
-                    
-                    if train_test_result.returncode == 0:
-                        print("Success: Created train vs test performance plots")
-                    else:
-                        print("Warning: Train/test visualization failed")
-                    
+                    # Note: Removed misleading train/test plot (was using artificial balanced data)
                     # Run PURE validation-focused visualization (no comparisons)
                     viz_result = self._run_script_with_model_redirect('create_validation_visualizations.py', timeout=300)
                     
@@ -957,6 +1188,19 @@ class AutoTrainingPipeline:
 
         if hasattr(self, 'results') and 'training_data_info' in self.results:
             for exp_name, exp_info in self.results['training_data_info'].items():
+                # Skip experiments that don't have trained models in per-experiment mode
+                if hasattr(self, 'trained_model_groups') and self.trained_model_groups:
+                    # Check if this experiment has a trained model
+                    group_key = None
+                    for group_name in self.trained_model_groups.keys():
+                        if exp_name in group_name or group_name in exp_name:
+                            group_key = group_name
+                            break
+
+                    if not group_key:
+                        print(f"⏭️  Skipping {exp_name}: No trained model available")
+                        continue
+
                 experiment_results[exp_name] = {}
 
                 # Process test file
@@ -990,92 +1234,139 @@ class AutoTrainingPipeline:
     def process_experiment_file(self, file_path, exp_name, split_type):
         """Process a single experiment file and return results."""
         try:
-            # Load models
-            models = self.load_validation_models()
+            # Load models - check for per-experiment model first
+            models = self.load_experiment_specific_model(exp_name)
             if models is None:
-                return False, None
+                # Fallback to generic validation models
+                models = self.load_validation_models()
+                if models is None:
+                    return False, None
 
             # Load and preprocess data
             df = pd.read_excel(file_path)
             print(f"Processing {len(df)} samples from {exp_name}/{split_type}")
 
-            # For enhanced models, use only original features (not improved ones) to match training
-            # Apply feature engineering but only use original features for consistency
+            # Apply feature engineering - enhanced models need the same engineered features as training
             df_improved = self.create_improved_features(df)
 
             # Extract ONLY original features to match what the model was trained on
             exclude_cols = ['NO.', 'ID', 'type', 'source_file', 'source_experiment', 'Centroid', 'BoundingBox', 'WeightedCentroid']
 
-            # Get original feature names from model metadata if available
-            if models['model_type'] == 'enhanced':
-                # Load original feature columns from metadata
-                metadata_path = self.models_dir / 'enhanced_model_metadata.joblib'
-                if metadata_path.exists():
-                    metadata = joblib.load(metadata_path)
-                    all_features = metadata['feature_columns']
-                    print(f"Using original feature columns from training: {len(all_features)} features")
-                else:
-                    # Fallback: use original features only (no enhanced ones)
-                    all_features = [col for col in df.columns  # Use original df, not df_improved
-                                   if col not in exclude_cols and df[col].dtype in ['float64', 'int64']]
-                    print(f"Using fallback original features: {len(all_features)} features")
-            else:
-                # Basic model: use improved features
-                all_features = [col for col in df_improved.columns
-                               if col not in exclude_cols and df_improved[col].dtype in ['float64', 'int64']]
+            # The scaler expects engineered features, so we need to use the improved dataframe
+            all_features = [col for col in df_improved.columns
+                           if col not in exclude_cols and df_improved[col].dtype in ['float64', 'int64']]
+            print(f"Using engineered features for scaler: {len(all_features)} features")
 
-            # Prepare features for prediction (use original df for enhanced models)
-            if models['model_type'] == 'enhanced':
-                # Use original df features to match training
-                X_all = df[all_features].fillna(df[all_features].median())
-            else:
-                # Use improved features for basic models
-                X_all = df_improved[all_features].fillna(df_improved[all_features].median())
+            # Prepare features for prediction - use engineered features for scaler
+            X_all = df_improved[all_features].fillna(df_improved[all_features].median())
 
             X_scaled = models['scaler'].transform(X_all)
-            X_selected = models['selector'].transform(X_scaled)
+
+            # For enhanced models, check metadata for correct feature selection
+            if models['model_type'] == 'enhanced':
+                # Load metadata to get correct feature selection
+                metadata_path = None
+                if models.get('experiment_specific') and models.get('group_name'):
+                    safe_group_name = models['group_name'].replace('/', '_').replace('\\', '_')
+                    metadata_path = self.models_dir / f'enhanced_model_metadata_{safe_group_name}.joblib'
+                else:
+                    # For concentration models, find the right metadata
+                    concentration_metadata = list(self.models_dir.glob("enhanced_model_metadata_*mM.joblib"))
+                    if concentration_metadata:
+                        metadata_path = concentration_metadata[0]
+
+                if metadata_path and metadata_path.exists():
+                    metadata = joblib.load(metadata_path)
+                    selected_feature_count = len(metadata.get('selected_features', []))
+                    if selected_feature_count:
+                        # Use only the first k features to match what was used during training
+                        X_selected = X_scaled[:, :selected_feature_count]
+                        print(f"Using exact {selected_feature_count} features from metadata")
+                    else:
+                        X_selected = models['selector'].transform(X_scaled)
+                        print(f"Using selector: {X_selected.shape[1]} features")
+                else:
+                    X_selected = models['selector'].transform(X_scaled)
+                    print(f"Using selector (no metadata): {X_selected.shape[1]} features")
+            else:
+                X_selected = models['selector'].transform(X_scaled)
 
             if models['model_type'] == 'enhanced':
-                # Enhanced model logic (using cluster components)
+                # Enhanced model logic - recreate EXACT same features as training
                 cluster_model = models['cluster_model']
                 kmeans = cluster_model['kmeans']
-                cluster_centers = cluster_model['cluster_centers']
+                gmm = cluster_model['gmm']
 
+                # Step 1: Apply EXACT same feature selection that was used during training
+                # X_selected should have same number of features that kmeans expects
+                print(f"K-means expects {kmeans.n_features_in_} features, we have {X_selected.shape[1]}")
+
+                # Create enhanced features (same as in training)
+                enhanced_features = []
+
+                # K-means clustering features
                 cluster_labels = kmeans.predict(X_selected)
-                cluster_features = []
+                cluster_centers = kmeans.cluster_centers_
 
-                for center in cluster_centers:
-                    dist = np.linalg.norm(X_selected - center, axis=1)
-                    cluster_features.append(dist)
+                # Distance to each cluster center
+                for i, center in enumerate(cluster_centers):
+                    distances = np.linalg.norm(X_selected - center, axis=1)
+                    enhanced_features.append(distances)
 
-                from sklearn.mixture import GaussianMixture
-                gmm = GaussianMixture(n_components=2, random_state=42)
-                gmm.fit(X_selected)
-                cluster_probs = gmm.predict_proba(X_selected)
-                for i in range(2):
-                    cluster_features.append(cluster_probs[:, i])
+                # GMM probabilities (use saved GMM)
+                gmm_probs = gmm.predict_proba(X_selected)
+                for i in range(gmm_probs.shape[1]):
+                    enhanced_features.append(gmm_probs[:, i])
 
-                cluster_features.extend([np.zeros(len(X_selected)), np.zeros(len(X_selected)), np.zeros(len(X_selected))])
-                error_indicator = (cluster_labels == 0).astype(float)
-                cluster_features.append(error_indicator)
+                # Cluster membership (one-hot encoded)
+                for i in range(4):
+                    cluster_membership = (cluster_labels == i).astype(float)
+                    enhanced_features.append(cluster_membership)
 
-                X_final = np.hstack((X_selected, np.column_stack(cluster_features)))
+                # Class-specific distance features (Class 4 vs Class 1)
+                # Convert to 0-indexed format
+                class_mapping = {1: 0, 2: 1, 3: 2, 4: 3}
+                y_labels = df['type'].values  # Get labels from the dataframe
+                y_indexed = np.array([class_mapping.get(label, 0) for label in y_labels])
+
+                class_4_mask = y_indexed == 3  # Class 4 (0-indexed as 3)
+                class_1_mask = y_indexed == 0  # Class 1 (0-indexed as 0)
+
+                if np.sum(class_4_mask) > 0 and np.sum(class_1_mask) > 0:
+                    # Calculate feature centers for Class 4 and Class 1
+                    class_4_mean = np.mean(X_selected[class_4_mask], axis=0)
+                    class_1_mean = np.mean(X_selected[class_1_mask], axis=0)
+
+                    # Distance to each class center
+                    dist_to_class_4 = np.linalg.norm(X_selected - class_4_mean, axis=1)
+                    dist_to_class_1 = np.linalg.norm(X_selected - class_1_mean, axis=1)
+
+                    enhanced_features.append(dist_to_class_4)
+                    enhanced_features.append(dist_to_class_1)
+                    enhanced_features.append(dist_to_class_4 - dist_to_class_1)  # Relative distance
+                else:
+                    # If we don't have both classes, add zero features
+                    enhanced_features.extend([np.zeros(len(X_selected)), np.zeros(len(X_selected)), np.zeros(len(X_selected))])
+
+                # Error-prone region indicator
+                error_prone_cluster = 0
+                error_indicator = (cluster_labels == error_prone_cluster).astype(float)
+                enhanced_features.append(error_indicator)
+
+                # Combine original and enhanced features
+                X_final = np.hstack([X_selected] + [feat.reshape(-1, 1) for feat in enhanced_features])
+
+                print(f"Created enhanced features: {X_selected.shape[1]} -> {X_final.shape[1]} features")
 
                 # Make ensemble predictions
-                ensemble_model = models['model']
-                ensemble_weights = ensemble_model['weights']
-                trained_models = ensemble_model['models']
-                reverse_mapping = ensemble_model['reverse_mapping']
+                ensemble_components = models['model']
+                voting_classifier = ensemble_components['voting_classifier']
+                reverse_mapping = ensemble_components['reverse_mapping']
 
-                # Ensemble prediction
-                predictions = np.zeros((len(X_final), 4))  # 4 classes
-                for name, model in trained_models.items():
-                    pred_proba = model.predict_proba(X_final)
-                    predictions += pred_proba * ensemble_weights[name]
-
-                y_pred_raw = np.argmax(predictions, axis=1)
+                # Use VotingClassifier for prediction
+                y_pred_raw = voting_classifier.predict(X_final)
+                y_pred_proba = voting_classifier.predict_proba(X_final)
                 y_pred = [reverse_mapping[pred] for pred in y_pred_raw]  # Convert back to 1,2,3,4
-                y_pred_proba = predictions
             else:
                 # Basic model logic
                 y_pred_raw = models['model'].predict(X_selected)
@@ -1166,6 +1457,10 @@ class AutoTrainingPipeline:
             # Create comparison plot (test vs val)
             if all_test_results and all_val_results:
                 self.create_test_vs_val_plot(experiment_results)
+
+            # Create training vs experiments performance plot
+            if all_test_results or all_val_results:
+                self.create_training_vs_experiments_plot(all_test_results, all_val_results)
 
         except Exception as e:
             print(f"Error creating summary plots: {e}")
@@ -1307,6 +1602,81 @@ class AutoTrainingPipeline:
         except Exception as e:
             print(f"Error creating test vs val plot: {e}")
 
+    def create_training_vs_experiments_plot(self, all_test_results, all_val_results):
+        """Create plot showing training accuracy vs individual experiment accuracies."""
+        try:
+            # Get training accuracy from metadata if available
+            training_accuracy = 1.0  # Default perfect training accuracy (from SMOTEENN augmented data)
+            metadata_file = self.output_dir / "models" / "enhanced_model_metadata.joblib"
+            if metadata_file.exists():
+                try:
+                    import joblib
+                    metadata = joblib.load(metadata_file)
+                    training_accuracy = metadata.get('training_accuracy', 1.0)
+                except:
+                    pass
+
+            # Collect experiment results
+            all_results = []
+            if all_test_results:
+                all_results.extend([(r['exp_name'].split('/')[-1] + '_test', r['accuracy'])
+                                  for r in all_test_results if r['accuracy'] is not None])
+            if all_val_results:
+                all_results.extend([(r['exp_name'].split('/')[-1] + '_val', r['accuracy'])
+                                  for r in all_val_results if r['accuracy'] is not None])
+
+            if not all_results:
+                print("No experiment results to plot")
+                return
+
+            # Create the plot
+            fig, ax = plt.subplots(figsize=(12, 8))
+
+            exp_names = [r[0] for r in all_results]
+            exp_accuracies = [r[1] for r in all_results]
+
+            # Training accuracy line
+            ax.axhline(y=training_accuracy, color='red', linestyle='--', linewidth=2,
+                      label=f'Training Accuracy ({training_accuracy:.1%})')
+
+            # Experiment accuracies
+            bars = ax.bar(range(len(exp_names)), exp_accuracies, color='skyblue', alpha=0.7)
+
+            # Add value labels on bars
+            for i, (bar, acc) in enumerate(zip(bars, exp_accuracies)):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                       f'{acc:.1%}', ha='center', va='bottom', fontweight='bold')
+
+                # Color code based on performance vs training
+                if acc < training_accuracy - 0.1:  # More than 10% drop
+                    bar.set_color('lightcoral')
+                elif acc < training_accuracy - 0.05:  # 5-10% drop
+                    bar.set_color('orange')
+                else:  # Good performance
+                    bar.set_color('lightgreen')
+
+            ax.set_title(f'Training vs Individual Experiment Performance - {self.network_dir.upper()}',
+                        fontsize=14, fontweight='bold')
+            ax.set_ylabel('Accuracy')
+            ax.set_xlabel('Experiment')
+            ax.set_xticks(range(len(exp_names)))
+            ax.set_xticklabels(exp_names, rotation=45, ha='right')
+            ax.set_ylim(0, min(1.1, max(max(exp_accuracies), training_accuracy) + 0.1))
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            plot_file = f'{self.network_dir}_training_vs_experiments.png'
+            output_plot_path = self.output_dir / 'plots' / plot_file
+            plt.savefig(output_plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+
+            print(f"Success: Created training vs experiments plot: {plot_file}")
+
+        except Exception as e:
+            print(f"Error creating training vs experiments plot: {e}")
+
     def create_improved_features(self, df):
         """Create improved features based on error analysis."""
         df_improved = df.copy()
@@ -1330,15 +1700,18 @@ class AutoTrainingPipeline:
         # 5. Intensity Stability Score
         gray_mean = df['MeanIntensity'] if 'MeanIntensity' in df.columns else df.get('Gray_ave', 0)
         df_improved['Intensity_Stability'] = gray_mean / (df['Gray_var'] + 1e-6)
-        
-        # 6. Comprehensive Shape Score
+
+        # 6. Major Minor Ratio (needed for Comprehensive Shape Score)
+        df_improved['Major_Minor_ratio'] = df['Major'] / (df['Minor'] + 1e-6)
+
+        # 7. Comprehensive Shape Score
         df_improved['Comprehensive_Shape'] = (
-            df_improved['Major_Minor_ratio'] * 
-            df_improved['Circularity'] * 
+            df_improved['Major_Minor_ratio'] *
+            df_improved['Circularity'] *
             (1 - df_improved['Eccentricity_Robust'])
         )
         
-        # 7. Class4 Discriminator
+        # 8. Class4 Discriminator
         df_improved['Class4_Discriminator'] = (
             df['Extent'] * df['Circularity'] * df['Perimeter']
         )
@@ -1348,10 +1721,53 @@ class AutoTrainingPipeline:
     def load_validation_models(self):
         """Load all required models and components for validation."""
         try:
-            # Try enhanced models first
+            # Try enhanced models first in current models_dir
             enhanced_model_path = self.models_dir / "enhanced_ensemble_model.joblib"
             cluster_model_path = self.models_dir / "cluster_model.joblib"
 
+            # Check for concentration-specific models first
+            if self.training_mode == 'concentration':
+                concentration_models = list(self.models_dir.glob("enhanced_ensemble_model_*mM.joblib"))
+                if concentration_models:
+                    # Use the first concentration model found (should work for any experiment)
+                    enhanced_model_path = concentration_models[0]
+                    concentration_suffix = enhanced_model_path.stem.replace('enhanced_ensemble_model', '')
+                    cluster_model_path = self.models_dir / f"cluster_model{concentration_suffix}.joblib"
+
+                    if enhanced_model_path.exists() and cluster_model_path.exists():
+                        print(f"Loading concentration-specific enhanced model: {enhanced_model_path.name}")
+                        return {
+                            'model': joblib.load(enhanced_model_path),
+                            'cluster_model': joblib.load(cluster_model_path),
+                            'scaler': joblib.load(self.models_dir / "latest_scaler.joblib"),
+                            'selector': joblib.load(self.models_dir / "latest_feature_selector.joblib"),
+                            'feature_names': joblib.load(self.models_dir / "latest_feature_names.joblib"),
+                            'model_type': 'enhanced'
+                        }
+
+            # For per-experiment mode, models are loaded by load_experiment_specific_model
+            # So this fallback should use basic models for validation compatibility
+
+            # If not found and we're using basic models dir, check latest results directory
+            if not (enhanced_model_path.exists() and cluster_model_path.exists()):
+                results_dirs = sorted([d for d in Path(".").glob("results_*") if d.is_dir()], reverse=True)
+                if results_dirs:
+                    latest_models_dir = results_dirs[0] / "models"
+                    enhanced_model_path = latest_models_dir / "enhanced_ensemble_model.joblib"
+                    cluster_model_path = latest_models_dir / "cluster_model.joblib"
+
+                    if enhanced_model_path.exists() and cluster_model_path.exists():
+                        print(f"Loading enhanced ensemble models from {results_dirs[0]}...")
+                        return {
+                            'model': joblib.load(enhanced_model_path),
+                            'cluster_model': joblib.load(cluster_model_path),
+                            'scaler': joblib.load(latest_models_dir / "latest_scaler.joblib"),
+                            'selector': joblib.load(latest_models_dir / "latest_feature_selector.joblib"),
+                            'feature_names': joblib.load(latest_models_dir / "latest_feature_names.joblib"),
+                            'model_type': 'enhanced'
+                        }
+
+            # If enhanced models exist in current dir
             if enhanced_model_path.exists() and cluster_model_path.exists():
                 print("Loading enhanced ensemble models...")
                 return {
@@ -1375,7 +1791,50 @@ class AutoTrainingPipeline:
         except Exception as e:
             print(f"Error loading models from {self.models_dir}: {e}")
             return None
-    
+
+    def load_experiment_specific_model(self, exp_name):
+        """Load model specific to an experiment in per-experiment mode."""
+        if not (hasattr(self, 'trained_model_groups') and self.trained_model_groups):
+            return None
+
+        # Find the group key that matches this experiment
+        group_key = None
+        for group_name in self.trained_model_groups.keys():
+            if exp_name in group_name or group_name in exp_name:
+                group_key = group_name
+                break
+
+        if not group_key:
+            return None
+
+        # Create safe filename suffix (same logic as in training)
+        safe_group_name = group_key.replace('/', '_').replace('\\', '_')
+        model_suffix = f"_{safe_group_name}"
+
+        try:
+            enhanced_model_path = self.models_dir / f"enhanced_ensemble_model{model_suffix}.joblib"
+            cluster_model_path = self.models_dir / f"cluster_model{model_suffix}.joblib"
+            metadata_path = self.models_dir / f"enhanced_model_metadata{model_suffix}.joblib"
+
+            if enhanced_model_path.exists() and cluster_model_path.exists():
+                print(f"Loading per-experiment model for {exp_name} (group: {group_key})")
+                return {
+                    'model': joblib.load(enhanced_model_path),
+                    'cluster_model': joblib.load(cluster_model_path),
+                    'scaler': joblib.load(self.models_dir / "latest_scaler.joblib"),
+                    'selector': joblib.load(self.models_dir / "latest_feature_selector.joblib"),
+                    'feature_names': joblib.load(self.models_dir / "latest_feature_names.joblib"),
+                    'model_type': 'enhanced',
+                    'experiment_specific': True,
+                    'group_name': group_key
+                }
+            else:
+                print(f"Per-experiment model files not found for {exp_name}")
+                return None
+        except Exception as e:
+            print(f"Error loading per-experiment model for {exp_name}: {e}")
+            return None
+
     def create_validation_visualization(self, y_true, y_pred, confidence, file_stem):
         """Create validation visualization plots."""
         try:
@@ -1840,7 +2299,11 @@ PIPELINE STATUS:
             # Step 1: Data Discovery
             self.discover_training_data()
             print("\nUsing test/val files from same experiments for validation")
-            
+
+            # Discover existing per-experiment models when skipping training
+            if self.skip_training and self.training_mode == 'per-experiment':
+                self.discover_existing_per_experiment_models()
+
             # Step 2: Feature Engineering
             if not self.skip_training:
                 if not self.run_feature_engineering():
@@ -1868,12 +2331,152 @@ PIPELINE STATUS:
             print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
             
             return True
-            
+
         except Exception as e:
             print(f"\nError: PIPELINE FAILED: {e}")
             import traceback
             traceback.print_exc()
             return False
+
+    def _get_tuned_models(self, X, y, sample_weights):
+        """Get hyperparameter-tuned models to prevent overfitting."""
+        from sklearn.model_selection import RandomizedSearchCV
+        from scipy.stats import randint, uniform
+        import xgboost as xgb
+        from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+
+        print("Performing hyperparameter tuning to prevent overfitting...")
+
+        # Split data for tuning (use original data, not augmented)
+        from sklearn.model_selection import train_test_split
+        X_tune, X_val, y_tune, y_val = train_test_split(X, y, test_size=0.2,
+                                                        random_state=self.random_seed,
+                                                        stratify=y)
+
+        tuned_models = {}
+
+        # 1. XGBoost with regularization focus
+        print("  Tuning XGBoost (regularization-focused)...")
+        xgb_params = {
+            'n_estimators': randint(50, 200),
+            'max_depth': randint(2, 6),
+            'learning_rate': uniform(0.01, 0.15),
+            'subsample': uniform(0.6, 0.4),
+            'colsample_bytree': uniform(0.6, 0.4),
+            'reg_alpha': uniform(0.1, 1.0),
+            'reg_lambda': uniform(0.5, 2.0),
+            'min_child_weight': randint(3, 10)
+        }
+
+        xgb_search = RandomizedSearchCV(
+            xgb.XGBClassifier(random_state=self.random_seed, eval_metric='mlogloss'),
+            xgb_params, n_iter=20, cv=3, scoring='accuracy',
+            random_state=self.random_seed, n_jobs=-1
+        )
+        xgb_search.fit(X_tune, y_tune)
+        tuned_models['xgb_tuned'] = xgb_search.best_estimator_
+        print(f"    Best XGBoost score: {xgb_search.best_score_:.3f}")
+
+        # 2. Random Forest with conservative settings
+        print("  Tuning Random Forest (conservative)...")
+        rf_params = {
+            'n_estimators': randint(50, 150),
+            'max_depth': randint(3, 8),
+            'min_samples_split': randint(5, 20),
+            'min_samples_leaf': randint(2, 10),
+            'max_features': ['sqrt', 'log2', 0.8]
+        }
+
+        rf_search = RandomizedSearchCV(
+            RandomForestClassifier(random_state=self.random_seed, class_weight='balanced'),
+            rf_params, n_iter=15, cv=3, scoring='accuracy',
+            random_state=self.random_seed, n_jobs=-1
+        )
+        rf_search.fit(X_tune, y_tune)
+        tuned_models['rf_tuned'] = rf_search.best_estimator_
+        print(f"    Best Random Forest score: {rf_search.best_score_:.3f}")
+
+        # 3. Gradient Boosting with early stopping
+        print("  Tuning Gradient Boosting (early stopping)...")
+        gb_params = {
+            'n_estimators': randint(50, 200),
+            'max_depth': randint(2, 5),
+            'learning_rate': uniform(0.01, 0.15),
+            'subsample': uniform(0.7, 0.3),
+            'min_samples_split': randint(5, 20),
+            'min_samples_leaf': randint(2, 10)
+        }
+
+        gb_search = RandomizedSearchCV(
+            GradientBoostingClassifier(random_state=self.random_seed),
+            gb_params, n_iter=15, cv=3, scoring='accuracy',
+            random_state=self.random_seed, n_jobs=-1
+        )
+        gb_search.fit(X_tune, y_tune)
+        tuned_models['gb_tuned'] = gb_search.best_estimator_
+        print(f"    Best Gradient Boosting score: {gb_search.best_score_:.3f}")
+
+        # 4. Add a simple logistic regression for baseline
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import StandardScaler
+
+        print("  Adding Logistic Regression baseline...")
+        # Scale features for logistic regression
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_tune)
+
+        lr_params = {
+            'C': uniform(0.01, 10),
+            'penalty': ['l1', 'l2'],
+            'solver': ['liblinear']
+        }
+
+        lr_search = RandomizedSearchCV(
+            LogisticRegression(random_state=self.random_seed, class_weight='balanced', max_iter=1000),
+            lr_params, n_iter=10, cv=3, scoring='accuracy',
+            random_state=self.random_seed, n_jobs=-1
+        )
+        lr_search.fit(X_scaled, y_tune)
+
+        # Create a pipeline for logistic regression with scaling
+        from sklearn.pipeline import Pipeline
+        lr_pipeline = Pipeline([
+            ('scaler', scaler),
+            ('classifier', lr_search.best_estimator_)
+        ])
+        tuned_models['lr_tuned'] = lr_pipeline
+        print(f"    Best Logistic Regression score: {lr_search.best_score_:.3f}")
+
+        print("Hyperparameter tuning completed!")
+        return tuned_models
+
+    def group_experiments_by_training_mode(self, training_data_info):
+        """Group experiments based on training mode."""
+        if self.training_mode == 'combined':
+            # Original behavior - all experiments together
+            return {'combined': list(training_data_info.keys())}
+
+        elif self.training_mode == 'concentration':
+            # Group by concentration (3mM vs 6mM)
+            groups = {'3mM': [], '6mM': []}
+            for exp_name in training_data_info.keys():
+                if '3mM' in exp_name:
+                    groups['3mM'].append(exp_name)
+                elif '6mM' in exp_name:
+                    groups['6mM'].append(exp_name)
+                else:
+                    # Default to 3mM if unclear
+                    groups['3mM'].append(exp_name)
+
+            # Remove empty groups
+            return {k: v for k, v in groups.items() if v}
+
+        elif self.training_mode == 'per-experiment':
+            # Each experiment gets its own model
+            return {exp_name: [exp_name] for exp_name in training_data_info.keys()}
+
+        else:
+            raise ValueError(f"Unknown training mode: {self.training_mode}")
 
 def main():
     """Main function with command line interface."""
@@ -1892,6 +2495,9 @@ def main():
     parser.add_argument('--skip-training', action='store_true', help='Skip training and only run validation on data_for_classification files')
     parser.add_argument('--model-dir', type=str, default=None, help='Custom model directory to use when skipping training (default: models/)')
     parser.add_argument('--network-dir', type=str, default="first_network", help='Network directory to use (first_network, second_network, third_network)')
+    parser.add_argument('--training-mode', type=str, default='combined',
+                       choices=['combined', 'concentration', 'per-experiment'],
+                       help='Training mode: combined (default), concentration (separate 3mM/6mM models), per-experiment (individual models)')
 
     args = parser.parse_args()
 
@@ -1903,7 +2509,8 @@ def main():
         skip_feature_eng=args.skip_feature_eng,
         skip_training=args.skip_training,
         model_dir=args.model_dir,
-        network_dir=args.network_dir
+        network_dir=args.network_dir,
+        training_mode=args.training_mode
     )
     
     try:

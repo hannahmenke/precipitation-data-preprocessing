@@ -25,48 +25,141 @@ class EnhancedModelTester:
     Class to test the enhanced model on validation data.
     """
     
-    def __init__(self):
-        self.models_dir = Path("models")
+    def __init__(self, output_dir="models"):
+        self.models_dir = Path(output_dir)
         self.original_model = None
         self.enhanced_model = None
         self.cluster_model = None
         self.scaler = None
         self.feature_selector = None
         self.feature_names = None
+        self.enhanced_models = {}  # Store concentration-specific models
+        self.cluster_models = {}   # Store concentration-specific cluster models
         
     def load_models(self):
         """Load all model components."""
         print("📂 Loading model components...")
-        
+
         # Load original model components
         self.original_model = joblib.load(self.models_dir / "latest_model.joblib")
         self.scaler = joblib.load(self.models_dir / "latest_scaler.joblib")
         self.feature_selector = joblib.load(self.models_dir / "latest_feature_selector.joblib")
         self.feature_names = joblib.load(self.models_dir / "latest_feature_names.joblib")
-        
-        # Load enhanced model components
-        self.enhanced_model = joblib.load(self.models_dir / "enhanced_ensemble_model.joblib")
-        self.cluster_model = joblib.load(self.models_dir / "cluster_model.joblib")
-        
+
+        # Try to load concentration-specific models first
+        concentration_models = {}
+        cluster_models = {}
+
+        for concentration in ['_3mM', '_6mM']:
+            enhanced_path = self.models_dir / f"enhanced_ensemble_model{concentration}.joblib"
+            cluster_path = self.models_dir / f"cluster_model{concentration}.joblib"
+
+            if enhanced_path.exists() and cluster_path.exists():
+                concentration_models[concentration] = joblib.load(enhanced_path)
+                cluster_models[concentration] = joblib.load(cluster_path)
+                print(f"✓ Loaded {concentration} enhanced ensemble model")
+
+        # If we found concentration-specific models, use them
+        if concentration_models:
+            self.enhanced_models = concentration_models
+            self.cluster_models = cluster_models
+            print(f"✓ Using {len(concentration_models)} concentration-specific models")
+        else:
+            # Fall back to single model
+            try:
+                self.enhanced_model = joblib.load(self.models_dir / "enhanced_ensemble_model.joblib")
+                self.cluster_model = joblib.load(self.models_dir / "cluster_model.joblib")
+                print("✓ Loaded single enhanced ensemble model")
+                print("✓ Loaded single cluster model")
+            except FileNotFoundError:
+                print("❌ No enhanced models found (neither concentration-specific nor single)")
+                raise
+
         print("✓ Loaded original model components")
-        print("✓ Loaded enhanced ensemble model")
-        print("✓ Loaded cluster model")
-        
+
+    def get_concentration_suffix(self, experiment_name):
+        """Determine concentration suffix from experiment name."""
+        if '3mM' in experiment_name or '3mm' in experiment_name.lower():
+            return '_3mM'
+        elif '6mM' in experiment_name or '6mm' in experiment_name.lower():
+            return '_6mM'
+        else:
+            # Default fallback - try to infer from patterns
+            if experiment_name.startswith('val3') or 'val3' in experiment_name:
+                return '_3mM'
+            elif experiment_name.startswith('val6') or 'val6' in experiment_name:
+                return '_6mM'
+            return None  # Unknown concentration
+
+    def get_model_for_experiment(self, experiment_name):
+        """Get the appropriate enhanced and cluster models for an experiment."""
+        if self.enhanced_models:  # Using concentration-specific models
+            concentration = self.get_concentration_suffix(experiment_name)
+            if concentration and concentration in self.enhanced_models:
+                return self.enhanced_models[concentration], self.cluster_models[concentration]
+            else:
+                # If concentration is unknown, try both and use first available
+                for conc in ['_3mM', '_6mM']:
+                    if conc in self.enhanced_models:
+                        print(f"⚠️  Unknown concentration for {experiment_name}, using {conc} model")
+                        return self.enhanced_models[conc], self.cluster_models[conc]
+                raise ValueError(f"No suitable model found for experiment {experiment_name}")
+        else:
+            # Using single model
+            return self.enhanced_model, self.cluster_model
+
     def load_validation_data(self):
-        """Load and preprocess validation datasets."""
+        """Load and preprocess validation datasets from training experiment splits."""
         print("\n📊 Loading validation datasets...")
-        
-        # Auto-discover ALL Excel files in data_for_classification
-        validation_dir = Path('data_for_classification')
-        all_val_files = list(validation_dir.glob("*.xlsx"))
-        all_val_files = [f for f in all_val_files if not f.name.startswith('.') and not f.name.startswith('~')]
-        
-        if not all_val_files:
-            print("⚠️  No validation files found in data_for_classification/")
+
+        # Discover test/val files from training experiments
+        # Determine network directory from model metadata
+        network_dir_name = "first_network"  # default
+        if "third_network" in str(self.models_dir):
+            network_dir_name = "third_network"
+
+        network_dir = Path('training_data') / network_dir_name
+        if not network_dir.exists():
+            print(f"⚠️  Network directory not found: {network_dir}")
             return None, None, None
+
+        all_val_files = []
+        experiment_names = []
+
+        # Collect test and val files from each experiment
+        for exp_dir in network_dir.iterdir():
+            if exp_dir.is_dir() and not exp_dir.name.startswith('.'):
+                split_data_dir = exp_dir / "split_data_tables"
+                if split_data_dir.exists():
+                    test_file = split_data_dir / "test.xlsx"
+                    val_file = split_data_dir / "val.xlsx"
+
+                    if test_file.exists():
+                        all_val_files.append(test_file)
+                        experiment_names.append(f"{exp_dir.name}_test")
+                    if val_file.exists():
+                        all_val_files.append(val_file)
+                        experiment_names.append(f"{exp_dir.name}_val")
+
+        if not all_val_files:
+            print(f"⚠️  No test/val files found in {network_dir}")
+            return None, None, None
+
+        print(f"📁 Found {len(all_val_files)} validation files from training experiments:")
         
-        print(f"📁 Found {len(all_val_files)} validation files:")
-        
+        # Check if we should use improved features based on training metadata
+        metadata_path = self.models_dir / 'enhanced_model_metadata.joblib'
+        use_improved_features = False
+        if metadata_path.exists():
+            metadata = joblib.load(metadata_path)
+            train_features = metadata.get('feature_columns', [])
+            # Check if any improved features were used during training
+            improved_feature_names = ['Area_Perimeter_Ratio', 'Class4_Discriminator', 'Comprehensive_Shape',
+                                      'Convex_Efficiency', 'Distance_Interaction', 'Shape_Complexity',
+                                      'Eccentricity_Robust', 'Distance_Ratio', 'Intensity_Stability']
+            use_improved_features = any(feat in train_features for feat in improved_feature_names)
+            print(f"ℹ️  Training used {'improved' if use_improved_features else 'original'} features")
+
         # Function to create improved features (same as in improve_features.py)
         def create_improved_features(df):
             df_improved = df.copy()
@@ -109,22 +202,28 @@ class EnhancedModelTester:
         all_datasets = {}
         improved_datasets = []
         total_samples = 0
-        
-        for val_file in all_val_files:
+
+        for val_file, exp_name in zip(all_val_files, experiment_names):
             try:
                 # Load original data
                 df = pd.read_excel(val_file)
-                dataset_name = val_file.stem
-                
-                # Apply feature engineering
-                df_improved = create_improved_features(df)
-                df_improved['source'] = dataset_name
-                
-                all_datasets[dataset_name] = df_improved
-                improved_datasets.append(df_improved)
+                dataset_name = exp_name  # Use experiment name instead of file stem
+
+                # Apply feature engineering conditionally
+                if use_improved_features:
+                    df_processed = create_improved_features(df)
+                    feature_status = "with improved features"
+                else:
+                    df_processed = df.copy()
+                    feature_status = "with original features"
+
+                df_processed['source'] = dataset_name
+
+                all_datasets[dataset_name] = df_processed
+                improved_datasets.append(df_processed)
                 total_samples += len(df)
-                
-                print(f"  📄 {dataset_name}: {len(df)} samples (with improved features)")
+
+                print(f"  📄 {dataset_name}: {len(df)} samples ({feature_status})")
                 
             except Exception as e:
                 print(f"  ❌ Error loading {val_file.name}: {e}")
@@ -140,143 +239,233 @@ class EnhancedModelTester:
         print(f"✓ TRUE combined dataset: {len(combined_val_df)} samples from {len(all_datasets)} files")
         print(f"✓ Total validation samples: {total_samples}")
         
-        # Extract individual datasets for compatibility
-        val3_improved = all_datasets.get('val3', None)
-        val6_improved = all_datasets.get('val6', None)
-        
-        if val3_improved is not None:
-            print(f"✓ val3 dataset: {len(val3_improved)} samples")
-        if val6_improved is not None:
-            print(f"✓ val6 dataset: {len(val6_improved)} samples")
-        
         # Print breakdown by dataset
         print(f"\n📊 Dataset breakdown:")
         for dataset_name in all_datasets:
             count = len(all_datasets[dataset_name])
             percentage = (count / total_samples) * 100
             print(f"  {dataset_name}: {count} samples ({percentage:.1f}%)")
-        
-        return val3_improved, val6_improved, combined_val_df
+
+        # Return all datasets (not just val3/val6)
+        return all_datasets, combined_val_df
     
     def preprocess_validation_data(self, val_df):
         """Preprocess validation data for both models."""
         print("🔄 Preprocessing validation data...")
-        
+
         # Handle column mapping issues
         val_df = val_df.copy()
-        
+
         # Map column names
         if 'NO.' in val_df.columns and 'ID' not in val_df.columns:
             val_df['ID'] = val_df['NO.']
-        
+
         # Create missing features if needed
         if 'Gray_ave' not in val_df.columns:
             if 'MeanIntensity' in val_df.columns:
                 val_df['Gray_ave'] = val_df['MeanIntensity']
             else:
                 val_df['Gray_ave'] = 0
-        
+
         if 'overall_mean_gray' not in val_df.columns:
             if 'MeanIntensity' in val_df.columns:
                 val_df['overall_mean_gray'] = val_df['MeanIntensity']
             else:
                 val_df['overall_mean_gray'] = 0
-        
+
         # Get features for processing
         exclude_cols = ['NO.', 'ID', 'type', 'source_file', 'source', 'Centroid', 'BoundingBox', 'WeightedCentroid']
-        available_features = [col for col in val_df.columns 
+        available_features = [col for col in val_df.columns
                             if col not in exclude_cols and val_df[col].dtype in ['int64', 'float64']]
-        
-        # Use only features that exist in both datasets
-        common_features = [feat for feat in available_features if feat in val_df.columns]
-        
-        # Get training feature names for comparison
-        training_features_path = Path('training_data/train_improved.xlsx')
-        if training_features_path.exists():
-            train_df = pd.read_excel(training_features_path)
-            train_features = [col for col in train_df.columns 
-                            if col not in exclude_cols and train_df[col].dtype in ['int64', 'float64']]
-            # Use intersection of available and training features
-            common_features = [feat for feat in common_features if feat in train_features]
-        
-        print(f"✓ Using {len(common_features)} common features")
-        
-        # Prepare feature matrix
-        X_raw = val_df[common_features].fillna(val_df[common_features].median())
-        X_scaled = self.scaler.transform(X_raw)
-        X_selected = self.feature_selector.transform(X_scaled)
-        
+
+        # Check what features the ORIGINAL model needs (for comparison predictions)
+        original_metadata_path = Path('third_network_combined/models/latest_metadata.joblib')
+        enhanced_metadata_path = Path('third_network_combined/models/enhanced_model_metadata.joblib')
+
+        original_features = []
+        enhanced_features = []
+
+        if original_metadata_path.exists():
+            orig_metadata = joblib.load(original_metadata_path)
+            original_features = orig_metadata.get('feature_names', [])
+            print(f"ℹ️  Original model needs {len(original_features)} features (with improvements)")
+
+        if enhanced_metadata_path.exists():
+            enh_metadata = joblib.load(enhanced_metadata_path)
+            enhanced_features = enh_metadata.get('feature_columns', [])
+            print(f"ℹ️  Enhanced model needs {len(enhanced_features)} features (original only)")
+
+        # Create improved features if original model needs them
+        if original_features:
+            # Check if any improved features are needed
+            improved_feature_names = ['Area_Perimeter_Ratio', 'Class4_Discriminator', 'Comprehensive_Shape',
+                                      'Convex_Efficiency', 'Distance_Interaction', 'Shape_Complexity',
+                                      'Eccentricity_Robust', 'Distance_Ratio', 'Intensity_Stability']
+            needs_improved = any(feat in original_features for feat in improved_feature_names)
+
+            if needs_improved:
+                # Create improved features for original model
+                val_df = self.create_improved_features_for_original(val_df)
+                print("ℹ️  Created improved features for original model")
+
+        # Prepare features for enhanced model (17 original features)
+        enhanced_common_features = [feat for feat in available_features if feat in enhanced_features]
+        X_raw_enhanced = val_df[enhanced_common_features].fillna(val_df[enhanced_common_features].median())
+        X_scaled_enhanced = self.scaler.transform(X_raw_enhanced)
+        X_selected_enhanced = self.feature_selector.transform(X_scaled_enhanced)
+
+        # Prepare features for original model (20 features with improvements)
+        if original_features:
+            original_common_features = [feat for feat in val_df.columns
+                                      if feat in original_features and feat not in exclude_cols]
+            X_raw_original = val_df[original_common_features].fillna(val_df[original_common_features].median())
+        else:
+            X_raw_original = X_raw_enhanced
+
+        print(f"✓ Enhanced model: {len(enhanced_common_features)} features")
+        print(f"✓ Original model: {len(original_common_features) if original_features else len(enhanced_common_features)} features")
+
         # Get true labels
         y_true = val_df['type'] if 'type' in val_df.columns else None
-        
-        return X_selected, X_raw, y_true, val_df
-    
-    def create_enhanced_features(self, X_selected):
+
+        return X_selected_enhanced, X_raw_original, y_true, val_df
+
+    def create_improved_features_for_original(self, df):
+        """Create improved features for the original model (same as in improve_features.py)."""
+        df_improved = df.copy()
+
+        # 1. Shape Complexity Score
+        if 'Extent' in df.columns and 'Circularity' in df.columns:
+            extent_norm = (df['Extent'] - df['Extent'].min()) / (df['Extent'].max() - df['Extent'].min() + 1e-6)
+            circularity_norm = (df['Circularity'] - df['Circularity'].min()) / (df['Circularity'].max() - df['Circularity'].min() + 1e-6)
+            df_improved['Shape_Complexity'] = extent_norm * (1 - circularity_norm)
+
+        # 2. Normalized Shape Ratios
+        if 'Area' in df.columns and 'Perimeter' in df.columns:
+            df_improved['Area_Perimeter_Ratio'] = df['Area'] / (df['Perimeter'] + 1e-6)
+        if 'Area' in df.columns and 'ConvexArea' in df.columns:
+            df_improved['Convex_Efficiency'] = df['Area'] / (df['ConvexArea'] + 1e-6)
+
+        # 3. Robust Eccentricity
+        if 'Eccentricity' in df.columns:
+            df_improved['Eccentricity_Robust'] = np.clip(df['Eccentricity'], 0, 1)
+
+        # 4. Distance Feature Combinations
+        if 'dis' in df.columns and 'dis_normal' in df.columns:
+            df_improved['Distance_Ratio'] = df['dis'] / (df['dis_normal'] + 1e-6)
+            df_improved['Distance_Interaction'] = df['dis'] * df['dis_normal']
+
+        # 5. Intensity Stability Score
+        gray_mean = df['MeanIntensity'] if 'MeanIntensity' in df.columns else df.get('Gray_ave', 0)
+        if 'Gray_var' in df.columns:
+            df_improved['Intensity_Stability'] = gray_mean / (df['Gray_var'] + 1e-6)
+
+        # 6. Comprehensive Shape Score
+        if all(col in df_improved.columns for col in ['Major_Minor_ratio', 'Circularity', 'Eccentricity_Robust']):
+            df_improved['Comprehensive_Shape'] = (
+                df_improved['Major_Minor_ratio'] *
+                df_improved['Circularity'] *
+                (1 - df_improved['Eccentricity_Robust'])
+            )
+
+        # 7. Class 4 Discriminator
+        if all(col in df_improved.columns for col in ['Gray_var', 'Circularity']):
+            df_improved['Class4_Discriminator'] = df_improved['Gray_var'] * (1 - df_improved['Circularity'])
+
+        return df_improved
+
+    def create_enhanced_features(self, X_selected, cluster_model):
         """Create enhanced features for the ensemble model."""
         print("🔧 Creating enhanced features...")
-        
-        # Get cluster predictions
-        cluster_labels = self.cluster_model.predict(X_selected)
-        
+
+        # Handle cluster model - it might be a dict containing multiple models
+        if isinstance(cluster_model, dict):
+            kmeans_model = cluster_model['kmeans']
+            gmm_model = cluster_model['gmm']
+            cluster_centers = cluster_model['cluster_centers']
+        else:
+            # Assume it's a single cluster model
+            kmeans_model = cluster_model
+            gmm_model = None
+            cluster_centers = cluster_model.cluster_centers_
+
+        # Get cluster predictions using KMeans model
+        cluster_labels = kmeans_model.predict(X_selected)
+
         # Create cluster features
         cluster_features = []
-        
+
         # 1. Distance to cluster centers
-        cluster_centers = self.cluster_model.cluster_centers_
         for center in cluster_centers:
             dist = np.sqrt(np.sum((X_selected - center) ** 2, axis=1))
             cluster_features.append(dist)
-        
+
         # 2. Cluster membership probabilities (soft clustering)
-        gmm = GaussianMixture(n_components=2, random_state=42)
-        gmm.fit(X_selected)
-        cluster_probs = gmm.predict_proba(X_selected)
+        if gmm_model:
+            # Use saved GMM model
+            cluster_probs = gmm_model.predict_proba(X_selected)
+        else:
+            # Fallback: create and fit new GMM
+            gmm = GaussianMixture(n_components=2, random_state=42)
+            gmm.fit(X_selected)
+            cluster_probs = gmm.predict_proba(X_selected)
         for i in range(2):
             cluster_features.append(cluster_probs[:, i])
-        
-        # 3. Simplified class distance features (placeholders)
+
+        # 3. Cluster membership (one-hot encoded) - MISSING FROM ORIGINAL CODE
+        for i in range(4):  # 4 clusters from KMeans
+            cluster_membership = (cluster_labels == i).astype(float)
+            cluster_features.append(cluster_membership)
+
+        # 4. Simplified class distance features (placeholders)
         # In production, you'd store the actual class centers from training
         cluster_features.extend([
             np.zeros(len(X_selected)),  # dist_to_class_4
             np.zeros(len(X_selected)),  # dist_to_class_1
             np.zeros(len(X_selected))   # class_4_vs_1_diff
         ])
-        
-        # 4. Error indicator based on cluster membership
+
+        # 5. Error indicator based on cluster membership
         error_indicator = (cluster_labels == 0).astype(float)  # Cluster 0 was high-error
         cluster_features.append(error_indicator)
-        
+
         # Combine features
         cluster_features_array = np.column_stack(cluster_features)
         X_enhanced = np.column_stack([X_selected, cluster_features_array])
-        
+
         print(f"✓ Enhanced features shape: {X_enhanced.shape}")
-        
+
         return X_enhanced, cluster_labels, error_indicator
     
-    def make_predictions(self, X_selected, X_enhanced):
+    def make_predictions(self, X_original, X_enhanced, enhanced_model):
         """Make predictions with both models."""
         print("🎯 Making predictions...")
-        
-        # Original model predictions
-        y_pred_original = self.original_model.predict(X_selected)
-        y_prob_original = self.original_model.predict_proba(X_selected)
-        
-        # Enhanced model predictions
-        y_pred_enhanced = self.enhanced_model.predict(X_enhanced)
-        y_prob_enhanced = self.enhanced_model.predict_proba(X_enhanced)
-        
+
+        # Original model predictions (using original features prepared in preprocessing)
+        y_pred_original = self.original_model.predict(X_original)
+        y_prob_original = self.original_model.predict_proba(X_original)
+
+        # Enhanced model predictions using provided model
+        # Handle enhanced model - it might be a dict containing the actual model
+        if isinstance(enhanced_model, dict):
+            actual_model = enhanced_model['voting_classifier']
+        else:
+            actual_model = enhanced_model
+
+        y_pred_enhanced = actual_model.predict(X_enhanced)
+        y_prob_enhanced = actual_model.predict_proba(X_enhanced)
+
         # Convert predictions back to original labels (1, 2, 3, 4)
         label_mapping = {0: 1, 1: 2, 2: 3, 3: 4}
         y_pred_original_labels = [label_mapping[pred] for pred in y_pred_original]
         y_pred_enhanced_labels = [label_mapping[pred] for pred in y_pred_enhanced]
-        
+
         # Calculate confidence scores
         confidence_original = np.max(y_prob_original, axis=1)
         confidence_enhanced = np.max(y_prob_enhanced, axis=1)
-        
+
         print("✓ Generated predictions and confidence scores")
-        
+
         return {
             'original': {
                 'predictions': y_pred_original_labels,
@@ -555,10 +744,15 @@ class EnhancedModelTester:
                     })
         
         summary_df = pd.DataFrame(summary_data)
-        summary_df.to_excel('enhanced_model_test_results.xlsx', index=False)
-        
-        print("✓ Saved summary results to: enhanced_model_test_results.xlsx")
-        
+        results_dir = self.models_dir.parent  # Get parent directory (e.g., third_network_combined)
+        reports_dir = results_dir / 'reports'
+        reports_dir.mkdir(exist_ok=True)  # Ensure reports directory exists
+
+        summary_file = reports_dir / 'enhanced_model_test_results.xlsx'
+        summary_df.to_excel(summary_file, index=False)
+
+        print(f"✓ Saved summary results to: {summary_file}")
+
         # Save individual predictions if needed
         for dataset_name, preds in predictions_dict.items():
             if preds is not None:
@@ -568,60 +762,74 @@ class EnhancedModelTester:
                     'original_confidence': preds['original']['confidence'],
                     'enhanced_confidence': preds['enhanced']['confidence']
                 })
-                pred_df.to_excel(f'{dataset_name}_predictions.xlsx', index=False)
-                print(f"✓ Saved {dataset_name} predictions to: {dataset_name}_predictions.xlsx")
+                pred_file = reports_dir / f'{dataset_name}_predictions.xlsx'
+                pred_df.to_excel(pred_file, index=False)
+                print(f"✓ Saved {dataset_name} predictions to: {pred_file}")
 
-def main():
+def main(output_dir="models"):
     """Main function to test enhanced model on validation datasets."""
     print("🧪 Testing Enhanced Model on Validation Datasets")
     print("=" * 60)
-    
+
     try:
         # Initialize tester
-        tester = EnhancedModelTester()
+        tester = EnhancedModelTester(output_dir)
         
         # Load models
         tester.load_models()
         
         # Load validation data
-        val3_df, val6_df, combined_val_df = tester.load_validation_data()
-        
-        # Test on different datasets
-        datasets = {
-            'val3': val3_df,
-            'val6': val6_df,
-            'combined': combined_val_df
-        }
+        all_datasets, combined_val_df = tester.load_validation_data()
+
+        if all_datasets is None:
+            print("❌ No validation data found")
+            return
+
+        # Test on actual experiment datasets + combined
+        datasets = dict(all_datasets)  # Copy all experiment datasets
+        datasets['combined'] = combined_val_df  # Add combined dataset
         
         results_dict = {}
         predictions_dict = {}
         
         for dataset_name, dataset_df in datasets.items():
             print(f"\n🎯 Testing on {dataset_name}...")
-            
+
             try:
+                # Get appropriate models for this dataset
+                enhanced_model, cluster_model = tester.get_model_for_experiment(dataset_name)
+
+                if tester.enhanced_models:  # Using concentration-specific models
+                    concentration = tester.get_concentration_suffix(dataset_name)
+                    if concentration:
+                        print(f"🔧 Using {concentration} concentration-specific model")
+                    else:
+                        print(f"🔧 Using fallback concentration-specific model for {dataset_name}")
+                else:
+                    print(f"🔧 Using single combined model for {dataset_name}")
+
                 # Preprocess data
-                X_selected, X_raw, y_true, processed_df = tester.preprocess_validation_data(dataset_df)
-                
-                # Create enhanced features
-                X_enhanced, cluster_labels, error_indicator = tester.create_enhanced_features(X_selected)
-                
-                # Make predictions
-                predictions = tester.make_predictions(X_selected, X_enhanced)
-                
+                X_selected, X_original, y_true, processed_df = tester.preprocess_validation_data(dataset_df)
+
+                # Create enhanced features with the appropriate cluster model
+                X_enhanced, cluster_labels, error_indicator = tester.create_enhanced_features(X_selected, cluster_model)
+
+                # Make predictions with the appropriate enhanced model
+                predictions = tester.make_predictions(X_original, X_enhanced, enhanced_model)
+
                 # Evaluate performance
                 results = tester.evaluate_performance(y_true, predictions, dataset_name)
-                
+
                 # Store results
                 results_dict[dataset_name] = results
                 predictions_dict[dataset_name] = predictions
-                
+
                 # Print cluster analysis
                 print(f"  Cluster analysis:")
                 print(f"    Cluster 0 (high-error): {np.sum(cluster_labels == 0)} samples")
                 print(f"    Cluster 1 (low-error): {np.sum(cluster_labels == 1)} samples")
                 print(f"    Error-prone samples: {np.sum(error_indicator)} samples")
-                
+
             except Exception as e:
                 print(f"❌ Error processing {dataset_name}: {e}")
                 results_dict[dataset_name] = None
@@ -642,4 +850,8 @@ def main():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    main() 
+    import sys
+
+    # Allow specifying output directory as command line argument
+    output_dir = sys.argv[1] if len(sys.argv) > 1 else "models"
+    main(output_dir) 

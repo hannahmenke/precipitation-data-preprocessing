@@ -104,8 +104,8 @@ def analyze_feature_improvements(train_df, test_df):
     # Define all potential features (original + new)
     exclude_cols = [
         'NO.', 'type', 'source_file', 'Centroid', 'BoundingBox', 'WeightedCentroid',
-        'FilledArea', 'FilledArea.1', 'PixelldxList', 'PixList', 'PixelValues', 
-        'Image', 'Gray_var.1'
+        'FilledArea', 'FilledArea.1', 'PixelldxList', 'PixList', 'PixelValues',
+        'Image', 'Gray_var.1', 'ID'
     ]
     
     feature_columns = [col for col in train_df.columns 
