@@ -17,94 +17,141 @@ from collections import Counter
 
 def load_model_components():
     """Load the model components."""
-    models_dir = Path("models")
-    
+    # Try to find the latest results directory
+    results_dirs = sorted([d for d in Path(".").glob("results_*") if d.is_dir()], reverse=True)
+    if not results_dirs:
+        models_dir = Path("models")
+    else:
+        models_dir = results_dirs[0] / "models"
+        print(f"✓ Using latest results directory: {results_dirs[0]}")
+
     try:
         # Load the enhanced ensemble model
-        model = joblib.load(models_dir / "enhanced_ensemble_model.joblib")
+        ensemble_components = joblib.load(models_dir / "enhanced_ensemble_model.joblib")
         cluster_model = joblib.load(models_dir / "cluster_model.joblib")
         metadata = joblib.load(models_dir / "enhanced_model_metadata.joblib")
-        
+
+        # Extract VotingClassifier
+        voting_classifier = ensemble_components['voting_classifier']
+        reverse_mapping = ensemble_components['reverse_mapping']
+
         # Load the original components for initial preprocessing
         original_scaler = joblib.load(models_dir / "latest_scaler.joblib")
         original_selector = joblib.load(models_dir / "latest_feature_selector.joblib")
         original_feature_names = joblib.load(models_dir / "latest_feature_names.joblib")
-        
-        print(f"✓ Loaded enhanced ensemble model with {metadata['n_features']} features")
-        
+
+        enhanced_features = metadata.get('enhanced_feature_shape', (None, 31))[1]
+        print(f"✓ Loaded enhanced ensemble model with {enhanced_features} features")
+
         label_mapping = {0: 1, 1: 2, 2: 3, 3: 4}  # Model outputs 0-3 for classes 1-4
-        return model, cluster_model, original_scaler, original_selector, original_feature_names, metadata, label_mapping
-    
+        return voting_classifier, cluster_model, original_scaler, original_selector, original_feature_names, metadata, label_mapping
+
     except Exception as e:
         print(f"[ERROR] Error loading model: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None, None, None, None, None, None
 
-def create_cluster_aware_features(X_selected, cluster_model):
+def create_cluster_aware_features(X_selected, y_data, cluster_model):
     """Create cluster-aware features consistent with training."""
-    # Get cluster labels
-    cluster_labels = cluster_model.predict(X_selected)
-    
-    # Distance to cluster centers
-    cluster_centers = cluster_model.cluster_centers_
-    cluster_features = []
-    for center in cluster_centers:
-        dist = np.linalg.norm(X_selected - center, axis=1)
-        cluster_features.append(dist)
-    
-    # Soft clustering probabilities (using GaussianMixture as in training)
-    from sklearn.mixture import GaussianMixture
-    gmm = GaussianMixture(n_components=2, random_state=42)
-    gmm.fit(X_selected)
-    cluster_probs = gmm.predict_proba(X_selected)
-    for i in range(2):
-        cluster_features.append(cluster_probs[:, i])
-    
-    # Placeholder for class center distances (simplified - in production you'd save these)
-    # For this demo, we'll use zeros as placeholder since we don't have the exact centers
-    cluster_features.extend([
-        np.zeros(len(X_selected)),  # dist_to_class_4
-        np.zeros(len(X_selected)),  # dist_to_class_1
-        np.zeros(len(X_selected))   # class_4_vs_1_diff
-    ])
-    
-    # Error indicator (assuming cluster 0 is high-error as in training)
-    error_indicator = (cluster_labels == 0).astype(float)
-    cluster_features.append(error_indicator)
-    
-    return np.column_stack(cluster_features)
+    try:
+        # Load cluster model components
+        kmeans = cluster_model['kmeans']
+        gmm = cluster_model['gmm']
+
+        # Create enhanced features (same as in training)
+        enhanced_features = []
+
+        # K-means clustering features
+        cluster_labels = kmeans.predict(X_selected)
+        cluster_centers = kmeans.cluster_centers_
+
+        # Distance to each cluster center
+        for i, center in enumerate(cluster_centers):
+            distances = np.linalg.norm(X_selected - center, axis=1)
+            enhanced_features.append(distances)
+
+        # GMM probabilities
+        gmm_probs = gmm.predict_proba(X_selected)
+        for i in range(gmm_probs.shape[1]):
+            enhanced_features.append(gmm_probs[:, i])
+
+        # Cluster membership (one-hot encoded)
+        for i in range(4):
+            cluster_membership = (cluster_labels == i).astype(float)
+            enhanced_features.append(cluster_membership)
+
+        # Class-specific distance features (Class 4 vs Class 1)
+        # Convert to 0-indexed format
+        class_mapping = {1: 0, 2: 1, 3: 2, 4: 3}
+        y_indexed = np.array([class_mapping.get(label, 0) for label in y_data])
+
+        class_4_mask = y_indexed == 3  # Class 4 (0-indexed as 3)
+        class_1_mask = y_indexed == 0  # Class 1 (0-indexed as 0)
+
+        if np.sum(class_4_mask) > 0 and np.sum(class_1_mask) > 0:
+            # Calculate feature centers for Class 4 and Class 1
+            class_4_mean = np.mean(X_selected[class_4_mask], axis=0)
+            class_1_mean = np.mean(X_selected[class_1_mask], axis=0)
+
+            # Distance to each class center
+            dist_to_class_4 = np.linalg.norm(X_selected - class_4_mean, axis=1)
+            dist_to_class_1 = np.linalg.norm(X_selected - class_1_mean, axis=1)
+
+            enhanced_features.append(dist_to_class_4)
+            enhanced_features.append(dist_to_class_1)
+            enhanced_features.append(dist_to_class_4 - dist_to_class_1)  # Relative distance
+        else:
+            # If we don't have both classes, add zero features
+            enhanced_features.extend([np.zeros(len(X_selected)), np.zeros(len(X_selected)), np.zeros(len(X_selected))])
+
+        # Error-prone region indicator
+        error_prone_cluster = 0
+        error_indicator = (cluster_labels == error_prone_cluster).astype(float)
+        enhanced_features.append(error_indicator)
+
+        return np.column_stack(enhanced_features)
+
+    except Exception as e:
+        print(f"❌ Error creating enhanced features: {e}")
+        # Return zero features as fallback
+        return np.zeros((len(X_selected), 14))
 
 def prepare_data_for_model(df, original_scaler, original_selector, cluster_model):
     """Prepare data for enhanced model."""
     try:
         # Collect all numeric features (excluding non-feature columns)
-        exclude_cols = ['NO.', 'ID', 'type', 'source_file', 'Centroid', 'BoundingBox', 'WeightedCentroid']
+        exclude_cols = ['NO.', 'ID', 'type', 'source_file', 'source_experiment', 'Centroid', 'BoundingBox', 'WeightedCentroid']
         all_features = [col for col in df.columns if col not in exclude_cols and df[col].dtype in ['float64', 'int64']]
-        
+
         X_all = df[all_features].copy()
-        
+
         # Handle missing values
         X_all = X_all.fillna(X_all.median())
-        
+
         # Scale using original scaler (this assumes the scaler was fit on these features)
         X_scaled = original_scaler.transform(X_all)
-        
+
         # Apply original selector to get selected features
         X_selected = original_selector.transform(X_scaled)
-        
-        # Create cluster features using the selected features
-        cluster_features = create_cluster_aware_features(X_selected, cluster_model)
-        
+
+        # Get labels for class-specific features
+        y = df['type'].to_numpy()
+
+        # Create cluster features using the selected features and labels
+        cluster_features = create_cluster_aware_features(X_selected, y, cluster_model)
+
         # Combine
         X_enhanced = np.hstack((X_selected, cluster_features))
-        
-        y = df['type'].to_numpy()
-        
+
         print(f"✓ Prepared data: {X_enhanced.shape} (all: {X_all.shape[1]} -> selected: {X_selected.shape[1]} + cluster: {cluster_features.shape[1]})")
-        
+
         return X_enhanced, y
-    
+
     except Exception as e:
         print(f"[ERROR] Error preparing data: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
 
 def create_train_test_performance_plot():
@@ -121,29 +168,58 @@ def create_train_test_performance_plot():
     # Load training data
     print("[LOAD] Loading training data...")
     try:
-        train_df = pd.read_excel('training_data/train_improved.xlsx')
-        print(f"✓ Loaded training data: {train_df.shape}")
-        
+        # Try to find the latest results directory first
+        results_dirs = sorted([d for d in Path(".").glob("results_*") if d.is_dir()], reverse=True)
+
+        train_files = []
+        if results_dirs:
+            train_files.append(results_dirs[0] / "data" / "combined_balanced_training_data.xlsx")
+        train_files.extend(['training_data/train_improved.xlsx', 'training_data/train3.xlsx'])
+
+        train_df = None
+        for train_file in train_files:
+            if Path(train_file).exists():
+                train_df = pd.read_excel(train_file)
+                print(f"✓ Loaded training data from {train_file}: {train_df.shape}")
+                break
+
+        if train_df is None:
+            print("[ERROR] No training data found")
+            return None, None
+
         X_train, y_train = prepare_data_for_model(train_df, scaler, selector, cluster_model)
         if X_train is None:
             print("[ERROR] Could not prepare training data")
             return None, None
-            
+
     except Exception as e:
         print(f"[ERROR] Error loading training data: {e}")
         return None, None
-    
+
     # Load test data
     print("[LOAD] Loading test data...")
     try:
-        test_df = pd.read_excel('test_data_improved.xlsx')
-        print(f"✓ Loaded test data: {test_df.shape}")
-        
+        test_files = []
+        if results_dirs:
+            test_files.append(results_dirs[0] / "data" / "combined_balanced_test_data.xlsx")
+        test_files.extend(['test_data_improved.xlsx', 'validation_data_improved.xlsx'])
+
+        test_df = None
+        for test_file in test_files:
+            if Path(test_file).exists():
+                test_df = pd.read_excel(test_file)
+                print(f"✓ Loaded test data from {test_file}: {test_df.shape}")
+                break
+
+        if test_df is None:
+            print("[ERROR] No test data found")
+            return None, None
+
         X_test, y_test = prepare_data_for_model(test_df, scaler, selector, cluster_model)
         if X_test is None:
             print("[ERROR] Could not prepare test data")
             return None, None
-            
+
     except Exception as e:
         print(f"[ERROR] Error loading test data: {e}")
         return None, None
@@ -233,7 +309,8 @@ def create_train_test_performance_plot():
     summary_text = "TRAINING vs TEST PERFORMANCE SUMMARY\n"
     summary_text += "=" * 40 + "\n\n"
     summary_text += f"Model Type: Enhanced Ensemble\n"
-    summary_text += f"Features Used: {metadata['n_features']}\n\n"
+    enhanced_features = metadata.get('enhanced_feature_shape', (None, 31))[1]
+    summary_text += f"Features Used: {enhanced_features}\n\n"
     summary_text += "ACCURACY RESULTS:\n"
     summary_text += f"  🎯 Training:  {train_accuracy:.1%} (n={len(y_train)})\n"
     summary_text += f"  🧪 Test:      {test_accuracy:.1%} (n={len(y_test)})\n"
