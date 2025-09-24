@@ -1237,8 +1237,8 @@ class AutoTrainingPipeline:
             # Load models - check for per-experiment model first
             models = self.load_experiment_specific_model(exp_name)
             if models is None:
-                # Fallback to generic validation models
-                models = self.load_validation_models()
+                # Fallback to generic validation models - pass experiment name for concentration routing
+                models = self.load_validation_models(exp_name)
                 if models is None:
                     return False, None
 
@@ -1719,7 +1719,7 @@ class AutoTrainingPipeline:
         
         return df_improved
     
-    def load_validation_models(self):
+    def load_validation_models(self, exp_name=None):
         """Load all required models and components for validation."""
         try:
             # Try enhanced models first in current models_dir
@@ -1727,13 +1727,37 @@ class AutoTrainingPipeline:
             cluster_model_path = self.models_dir / "cluster_model.joblib"
 
             # Check for concentration-specific models first
-            if self.training_mode == 'concentration':
-                concentration_models = list(self.models_dir.glob("enhanced_ensemble_model_*mM.joblib"))
-                if concentration_models:
-                    # Use the first concentration model found (should work for any experiment)
-                    enhanced_model_path = concentration_models[0]
-                    concentration_suffix = enhanced_model_path.stem.replace('enhanced_ensemble_model', '')
-                    cluster_model_path = self.models_dir / f"cluster_model{concentration_suffix}.joblib"
+            if self.training_mode == 'concentration' and exp_name:
+                # Extract concentration from experiment name (e.g., "third_network/6mM-4" -> "6mM")
+                concentration = None
+                if "3mM" in exp_name:
+                    concentration = "3mM"
+                elif "6mM" in exp_name:
+                    concentration = "6mM"
+
+                if concentration:
+                    # Try to load the specific concentration model
+                    target_enhanced_path = self.models_dir / f"enhanced_ensemble_model_{concentration}.joblib"
+                    target_cluster_path = self.models_dir / f"cluster_model_{concentration}.joblib"
+
+                    if target_enhanced_path.exists() and target_cluster_path.exists():
+                        enhanced_model_path = target_enhanced_path
+                        cluster_model_path = target_cluster_path
+                        print(f"Loading {concentration} concentration-specific enhanced model: {enhanced_model_path.name}")
+                    else:
+                        print(f"Warning: {concentration} model not found, falling back to any available concentration model")
+                        concentration_models = list(self.models_dir.glob("enhanced_ensemble_model_*mM.joblib"))
+                        if concentration_models:
+                            enhanced_model_path = concentration_models[0]
+                            concentration_suffix = enhanced_model_path.stem.replace('enhanced_ensemble_model', '')
+                            cluster_model_path = self.models_dir / f"cluster_model{concentration_suffix}.joblib"
+                else:
+                    print(f"Warning: Could not detect concentration from {exp_name}, using first available model")
+                    concentration_models = list(self.models_dir.glob("enhanced_ensemble_model_*mM.joblib"))
+                    if concentration_models:
+                        enhanced_model_path = concentration_models[0]
+                        concentration_suffix = enhanced_model_path.stem.replace('enhanced_ensemble_model', '')
+                        cluster_model_path = self.models_dir / f"cluster_model{concentration_suffix}.joblib"
 
                     if enhanced_model_path.exists() and cluster_model_path.exists():
                         print(f"Loading concentration-specific enhanced model: {enhanced_model_path.name}")
