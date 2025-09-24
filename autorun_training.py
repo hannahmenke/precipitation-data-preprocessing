@@ -1246,19 +1246,17 @@ class AutoTrainingPipeline:
             df = pd.read_excel(file_path)
             print(f"Processing {len(df)} samples from {exp_name}/{split_type}")
 
-            # Apply feature engineering - enhanced models need the same engineered features as training
-            df_improved = self.create_improved_features(df)
-
+            # Enhanced models were trained on ORIGINAL features only (not improved features)
             # Extract ONLY original features to match what the model was trained on
             exclude_cols = ['NO.', 'ID', 'type', 'source_file', 'source_experiment', 'Centroid', 'BoundingBox', 'WeightedCentroid']
 
-            # The scaler expects engineered features, so we need to use the improved dataframe
-            all_features = [col for col in df_improved.columns
-                           if col not in exclude_cols and df_improved[col].dtype in ['float64', 'int64']]
-            print(f"Using engineered features for scaler: {len(all_features)} features")
+            # Use original dataframe features only (same as in test_enhanced_model.py)
+            all_features = [col for col in df.columns
+                           if col not in exclude_cols and df[col].dtype in ['float64', 'int64']]
+            print(f"Using original features for enhanced model: {len(all_features)} features")
 
-            # Prepare features for prediction - use engineered features for scaler
-            X_all = df_improved[all_features].fillna(df_improved[all_features].median())
+            # Prepare features for prediction - use original features only
+            X_all = df[all_features].fillna(df[all_features].median())
 
             X_scaled = models['scaler'].transform(X_all)
 
