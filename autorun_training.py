@@ -128,32 +128,15 @@ class AutoTrainingPipeline:
             sys.stdout = self.logger.terminal  # Restore original stdout
     
     def _run_script_with_model_redirect(self, script_name, timeout=300):
-        """Run a script with temporary model directory redirection."""
-        original_models_dir = Path("models")
-        models_backup_dir = Path("models_backup_temp_script")
-        
-        # Backup original models directory if it exists
-        if original_models_dir.exists():
-            if models_backup_dir.exists():
-                shutil.rmtree(models_backup_dir)
-            shutil.move(str(original_models_dir), str(models_backup_dir))
-        
-        # Create symlink to results models directory
-        original_models_dir.symlink_to(self.output_dir / 'models', target_is_directory=True)
-        
-        try:
-            result = subprocess.run([
-                sys.executable, script_name
-            ], capture_output=True, text=True, timeout=timeout)
-            return result
-        finally:
-            # Clean up symlink
-            if original_models_dir.is_symlink():
-                original_models_dir.unlink()
-            
-            # Restore backup if it exists
-            if models_backup_dir.exists():
-                shutil.move(str(models_backup_dir), str(original_models_dir))
+        """Run a script with model directory passed via environment variable."""
+        # Pass the models directory via environment variable instead of symlink
+        env = os.environ.copy()
+        env['AUTORUN_MODELS_DIR'] = str(self.output_dir / 'models')
+
+        result = subprocess.run([
+            sys.executable, script_name
+        ], capture_output=True, text=True, timeout=timeout, env=env)
+        return result
         
     def setup_output_directory(self):
         """Setup output directory structure."""
@@ -442,21 +425,16 @@ class AutoTrainingPipeline:
             print("\nSTEP: Applying experiment and class balancing...")
             balanced_train = self.balance_training_data(all_train_data)
 
-            # Save as traditional format expected by improve_features.py
+            # Save combined training data for this run
             train_dir = self.output_dir / 'data'
             train_dir.mkdir(exist_ok=True)
             balanced_train.to_excel(train_dir / 'combined_balanced_training_data.xlsx', index=False)
             print(f"Saved balanced training data to {train_dir}/combined_balanced_training_data.xlsx")
 
-            # Also save to base training_data for feature engineering script compatibility
-            base_train_dir = Path('training_data')
-            balanced_train.to_excel(base_train_dir / 'train3.xlsx', index=False)
-
             # If we have test data, create combined balanced test data
             if all_test_data:
                 balanced_test = self.balance_training_data(all_test_data)
                 balanced_test.to_excel(train_dir / 'combined_balanced_test_data.xlsx', index=False)
-                balanced_test.to_excel(base_train_dir / 'train6.xlsx', index=False)  # For script compatibility
                 print(f"Saved balanced test data to {train_dir}/combined_balanced_test_data.xlsx: {len(balanced_test)} samples")
 
             return True
@@ -613,9 +591,9 @@ class AutoTrainingPipeline:
         print("\nSTEP 2: Feature Engineering")
         print("=" * 50)
 
-        # Check if improved data already exists
-        improved_train_path = Path('training_data/train_improved.xlsx')
-        improved_test_path = Path('test_data_improved.xlsx')  # Renamed for clarity - this is test data
+        # Check if improved data already exists (prefer run-scoped outputs)
+        improved_train_path = self.output_dir / 'data' / 'train_improved.xlsx'
+        improved_test_path = self.output_dir / 'data' / 'test_improved.xlsx'
 
         if self.skip_feature_eng and improved_train_path.exists() and improved_test_path.exists():
             print("Success: Skipping feature engineering - improved data already exists")
@@ -632,10 +610,17 @@ class AutoTrainingPipeline:
         print("Running feature engineering script...")
 
         try:
-            # Run the improve_features.py script
+            # Run the improve_features.py script with explicit IO paths
+            env = os.environ.copy()
+            env['AUTORUN_MODELS_DIR'] = str(self.output_dir / 'models')
+            env['AUTORUN_NETWORK_DIR'] = self.network_dir
+            env['AUTORUN_TRAIN_INPUT'] = str(self.output_dir / 'data' / 'combined_balanced_training_data.xlsx')
+            env['AUTORUN_TEST_INPUT'] = str(self.output_dir / 'data' / 'combined_balanced_test_data.xlsx')
+            env['AUTORUN_TRAIN_OUT'] = str(self.output_dir / 'data' / 'train_improved.xlsx')
+            env['AUTORUN_TEST_OUT'] = str(self.output_dir / 'data' / 'test_improved.xlsx')
             result = subprocess.run([
                 sys.executable, 'improve_features.py'
-            ], capture_output=True, text=True, timeout=300)  # 5 minute timeout
+            ], capture_output=True, text=True, timeout=300, env=env)  # 5 minute timeout
 
             # Save logs regardless of success/failure
             self.save_subprocess_logs(result, "feature_engineering")
@@ -645,12 +630,8 @@ class AutoTrainingPipeline:
                 print("Output:")
                 print(result.stdout)
 
-                # Copy improved data to output directory
-                if improved_train_path.exists():
-                    shutil.copy2(improved_train_path, self.output_dir / 'data' / 'train_improved.xlsx')
-                if improved_test_path.exists():
-                    shutil.copy2(improved_test_path, self.output_dir / 'data' / 'test_improved.xlsx')
-
+                # Improved data saved directly to output_dir/data via env paths
+                
                 self.pipeline_status['feature_engineering'] = True
                 return True
             else:
@@ -691,16 +672,19 @@ class AutoTrainingPipeline:
 
     def _train_single_combined_model(self):
         """Train single ensemble model with all experiments combined (original approach)."""
-        train_data_path = self.output_dir / 'data' / 'combined_balanced_training_data.xlsx'
+        # Load improved features from run-scoped output (fallback to legacy location)
+        train_data_path = self.output_dir / 'data' / 'train_improved.xlsx'
+        if not train_data_path.exists():
+            train_data_path = Path('training_data/train_improved.xlsx')
         class_weights_path = self.output_dir / 'data' / 'class_weights.json'
 
         if not train_data_path.exists():
-            print("Error: Balanced training data not found")
+            print("Error: Improved training data not found - feature engineering may have failed")
             return False
 
-        print("Loading balanced training data and class weights...")
-        train_df = pd.read_excel(train_data_path)
-        print(f"Loaded {len(train_df)} training samples")
+        print("Loading improved training data and class weights...")
+        train_df = pd.read_excel(train_data_path, engine='openpyxl')
+        print(f"Loaded {len(train_df)} training samples with improved features")
 
         class_weights = None
         if class_weights_path.exists():
@@ -744,6 +728,13 @@ class AutoTrainingPipeline:
             # Combine and balance data for this group
             combined_df = pd.concat(group_data, ignore_index=True)
             print(f"Combined {len(combined_df)} samples for group {group_name}")
+
+            # Use improved features to align training with validation feature space
+            try:
+                combined_df = self.create_improved_features(combined_df)
+                print(f"Applied improved feature engineering for group '{group_name}' (columns: {combined_df.shape[1]})")
+            except Exception as e:
+                print(f"Warning: Failed to create improved features for group '{group_name}' ({e}). Proceeding with raw features.")
 
             # Check if we have sufficient data for training
             class_counts = combined_df['type'].value_counts()
@@ -1029,6 +1020,10 @@ class AutoTrainingPipeline:
             print("\nEnsemble Model Training Results:")
             print(classification_report(y_orig_for_eval, ensemble_pred_mapped))
 
+            # Compute training accuracy for metadata/plots
+            train_accuracy = accuracy_score(y_orig_for_eval, ensemble_pred_mapped)
+            print(f"Training accuracy (on resampled data): {train_accuracy:.3f}")
+
             # Class-specific analysis (focus on Class 4 vs Class 1 confusion)
             self.analyze_class_performance(y_orig_for_eval, ensemble_pred_mapped, "Training")
 
@@ -1055,7 +1050,13 @@ class AutoTrainingPipeline:
             }
             joblib.dump(cluster_model, models_dir / f'cluster_model{model_suffix}.joblib')
 
-            # Save preprocessing components (only once for the first model if multiple models)
+            # Save preprocessing components
+            # Always save group-specific copies when a suffix is provided
+            if model_suffix:
+                joblib.dump(scaler, models_dir / f'scaler{model_suffix}.joblib')
+                joblib.dump(selector, models_dir / f'feature_selector{model_suffix}.joblib')
+                joblib.dump(selected_features, models_dir / f'feature_names{model_suffix}.joblib')
+            # Also save 'latest' once for backward compatibility
             if model_suffix == "" or not (models_dir / 'latest_scaler.joblib').exists():
                 joblib.dump(scaler, models_dir / 'latest_scaler.joblib')
                 joblib.dump(selector, models_dir / 'latest_feature_selector.joblib')
@@ -1068,6 +1069,8 @@ class AutoTrainingPipeline:
                 'enhanced_feature_shape': X_enhanced.shape,
                 'class_weights': class_weights,
                 'model_scores': model_scores,
+                'training_accuracy': float(train_accuracy),
+                'cv_accuracy_mean': float(np.mean(ensemble_cv_scores)) if 'ensemble_cv_scores' in locals() else None,
                 'training_samples': len(train_df),
                 'timestamp': datetime.now().isoformat(),
                 'model_suffix': model_suffix
@@ -1096,75 +1099,71 @@ class AutoTrainingPipeline:
             # Process each validation file separately
             return self.run_individual_validation_testing()
         else:
-            # Original combined validation testing + individual processing
-            print("Running enhanced model validation...")
-            
-            success_combined = True
-            try:
-                # Run the test_enhanced_model.py script (without visualization)
-                # Use symlink redirection for model access
-                result = self._run_script_with_model_redirect('test_enhanced_model.py', timeout=600)
-                
-                # Save logs regardless of success/failure
-                self.save_subprocess_logs(result, "validation_testing")
-                
-                if result.returncode == 0:
-                    print("Success: Combined validation testing completed successfully")
-                    print("Combined validation output:")
-                    print(result.stdout)
-                    
-                    # Note: Removed misleading train/test plot (was using artificial balanced data)
-                    # Run PURE validation-focused visualization (no comparisons)
-                    viz_result = self._run_script_with_model_redirect('create_validation_visualizations.py', timeout=300)
-                    
-                    # Save logs for validation visualization
-                    self.save_subprocess_logs(viz_result, "validation_visualization")
-                    
-                    if viz_result.returncode == 0:
-                        print("Success: Created pure validation visualizations (NO comparisons)")
-                    else:
-                        print("Warning: Pure validation visualization failed")
-                    
-                    # Copy validation results to output directory (PURE validation only)
-                    results_to_copy = [
-                        'enhanced_model_test_results.xlsx',
-                        'train_test_performance.png',  # Train vs test performance (enhanced features)
-                        'enhanced_model_validation_results.png',  # Pure validation (no comparisons)
-                        'val3_predictions.xlsx',
-                        'val6_predictions.xlsx',
-                        'combined_predictions.xlsx'
-                    ]
-                    
-                    for result_file in results_to_copy:
-                        src_path = Path(result_file)
-                        if src_path.exists():
-                            if result_file.endswith('.png'):
-                                shutil.move(src_path, self.output_dir / 'plots' / result_file)
-                            else:
-                                shutil.move(src_path, self.output_dir / 'reports' / result_file)
+            # Combined comparison script only makes sense for combined training mode
+            success_combined = False
+            if self.training_mode == 'combined':
+                print("Running enhanced model validation (combined mode)...")
+                try:
+                    # Run the test_enhanced_model.py script (without visualization)
+                    # Use environment redirection for model access
+                    result = self._run_script_with_model_redirect('test_enhanced_model.py', timeout=600)
 
-                    # NEW: Move all dynamically generated individual validation plots
-                    for plot_file in Path('.').glob('enhanced_model_*_results.png'):
-                        shutil.move(plot_file, self.output_dir / 'plots' / plot_file.name)
-                    # ALSO move all *_validation_results.png plots (from individual scripts)
-                    for plot_file in Path('.').glob('*_validation_results.png'):
-                        shutil.move(plot_file, self.output_dir / 'plots' / plot_file.name)
-                    
-                    # Parse validation results for summary
-                    self.parse_validation_results()
-                    
-                else:
-                    print("Error: Combined validation testing failed")
-                    print("Error output:")
-                    print(result.stderr)
-                    success_combined = False
-                    
-            except subprocess.TimeoutExpired:
-                print("Error: Combined validation testing timed out")
-                success_combined = False
-            except Exception as e:
-                print(f"Error: Error running combined validation testing: {e}")
-                success_combined = False
+                    # Save logs regardless of success/failure
+                    self.save_subprocess_logs(result, "validation_testing")
+
+                    if result.returncode == 0:
+                        success_combined = True
+                        print("Success: Combined validation testing completed successfully")
+                        print("Combined validation output:")
+                        print(result.stdout)
+
+                        # Run PURE validation-focused visualization (no comparisons)
+                        viz_result = self._run_script_with_model_redirect('create_validation_visualizations.py', timeout=300)
+
+                        # Save logs for validation visualization
+                        self.save_subprocess_logs(viz_result, "validation_visualization")
+
+                        if viz_result.returncode == 0:
+                            print("Success: Created pure validation visualizations (NO comparisons)")
+                        else:
+                            print("Warning: Pure validation visualization failed")
+
+                        # Copy validation results to output directory (PURE validation only)
+                        results_to_copy = [
+                            'enhanced_model_test_results.xlsx',
+                            'train_test_performance.png',
+                            'enhanced_model_validation_results.png',
+                            'val3_predictions.xlsx',
+                            'val6_predictions.xlsx',
+                            'combined_predictions.xlsx'
+                        ]
+
+                        for result_file in results_to_copy:
+                            src_path = Path(result_file)
+                            if src_path.exists():
+                                if result_file.endswith('.png'):
+                                    shutil.move(src_path, self.output_dir / 'plots' / result_file)
+                                else:
+                                    shutil.move(src_path, self.output_dir / 'reports' / result_file)
+
+                        # Move dynamically generated individual validation plots
+                        for plot_file in Path('.').glob('enhanced_model_*_results.png'):
+                            shutil.move(plot_file, self.output_dir / 'plots' / plot_file.name)
+                        for plot_file in Path('.').glob('*_validation_results.png'):
+                            shutil.move(plot_file, self.output_dir / 'plots' / plot_file.name)
+
+                        # Parse validation results for summary
+                        self.parse_validation_results()
+                    else:
+                        print("Error: Combined validation testing failed")
+                        print("Error output:")
+                        print(result.stderr)
+                except subprocess.TimeoutExpired:
+                    print("Error: Combined validation testing timed out")
+                except Exception as e:
+                    print(f"Error: Error running combined validation testing: {e}")
+            else:
+                print(f"Skipping combined comparison script for training_mode='{self.training_mode}'")
             
             # ALWAYS run individual validation testing for ALL files in data_for_classification
             print("\nSTEP: Running individual validation testing for all files...")
@@ -1263,32 +1262,34 @@ class AutoTrainingPipeline:
 
             X_scaled = models['scaler'].transform(X_all)
 
-            # For enhanced models, check metadata for correct feature selection
+            # For enhanced models, prefer the trained selector to ensure exact feature selection
             if models['model_type'] == 'enhanced':
-                # Load metadata to get correct feature selection
-                metadata_path = None
-                if models.get('experiment_specific') and models.get('group_name'):
-                    safe_group_name = models['group_name'].replace('/', '_').replace('\\', '_')
-                    metadata_path = self.models_dir / f'enhanced_model_metadata_{safe_group_name}.joblib'
-                else:
-                    # For concentration models, find the right metadata
-                    concentration_metadata = list(self.models_dir.glob("enhanced_model_metadata_*mM.joblib"))
-                    if concentration_metadata:
-                        metadata_path = concentration_metadata[0]
+                try:
+                    X_selected = models['selector'].transform(X_scaled)
+                    print(f"Using selector: {X_selected.shape[1]} features")
+                except Exception:
+                    # Fallback: try metadata to at least match dimensionality
+                    metadata_path = None
+                    if models.get('experiment_specific') and models.get('group_name'):
+                        safe_group_name = models['group_name'].replace('/', '_').replace('\\', '_')
+                        metadata_path = self.models_dir / f'enhanced_model_metadata_{safe_group_name}.joblib'
+                    else:
+                        concentration_metadata = list(self.models_dir.glob("enhanced_model_metadata_*mM.joblib"))
+                        if concentration_metadata:
+                            metadata_path = concentration_metadata[0]
 
-                if metadata_path and metadata_path.exists():
-                    metadata = joblib.load(metadata_path)
-                    selected_feature_count = len(metadata.get('selected_features', []))
-                    if selected_feature_count:
-                        # Use only the first k features to match what was used during training
-                        X_selected = X_scaled[:, :selected_feature_count]
-                        print(f"Using exact {selected_feature_count} features from metadata")
+                    if metadata_path and metadata_path.exists():
+                        metadata = joblib.load(metadata_path)
+                        selected_feature_count = len(metadata.get('selected_features', []))
+                        if selected_feature_count:
+                            X_selected = X_scaled[:, :selected_feature_count]
+                            print(f"Using feature count from metadata: {selected_feature_count}")
+                        else:
+                            X_selected = models['selector'].transform(X_scaled)
+                            print(f"Using selector (no metadata features): {X_selected.shape[1]} features")
                     else:
                         X_selected = models['selector'].transform(X_scaled)
-                        print(f"Using selector: {X_selected.shape[1]} features")
-                else:
-                    X_selected = models['selector'].transform(X_scaled)
-                    print(f"Using selector (no metadata): {X_selected.shape[1]} features")
+                        print(f"Using selector (no metadata available): {X_selected.shape[1]} features")
             else:
                 X_selected = models['selector'].transform(X_scaled)
 
@@ -1604,66 +1605,123 @@ class AutoTrainingPipeline:
             print(f"Error creating test vs val plot: {e}")
 
     def create_training_vs_experiments_plot(self, all_test_results, all_val_results):
-        """Create plot showing training accuracy vs individual experiment accuracies."""
+        """Create plot showing training accuracy vs individual experiment accuracies.
+        - Combined mode: one line for the single model's training (or CV) accuracy.
+        - Concentration/per-experiment: one line per trained model group, scoped to its experiments.
+        """
         try:
-            # Get training accuracy from metadata if available
-            training_accuracy = 1.0  # Default perfect training accuracy (from SMOTEENN augmented data)
-            metadata_file = self.output_dir / "models" / "enhanced_model_metadata.joblib"
-            if metadata_file.exists():
-                try:
-                    import joblib
-                    metadata = joblib.load(metadata_file)
-                    training_accuracy = metadata.get('training_accuracy', 1.0)
-                except:
-                    pass
+            import joblib
+            models_dir = self.output_dir / "models"
 
-            # Collect experiment results
-            all_results = []
+            # Collect experiment results with full exp names for grouping
+            entries = []  # (label, accuracy, full_exp_name)
             if all_test_results:
-                all_results.extend([(r['exp_name'].split('/')[-1] + '_test', r['accuracy'])
-                                  for r in all_test_results if r['accuracy'] is not None])
+                entries.extend([
+                    (r['exp_name'].split('/')[-1] + '_test', r['accuracy'], r['exp_name'])
+                    for r in all_test_results if r['accuracy'] is not None
+                ])
             if all_val_results:
-                all_results.extend([(r['exp_name'].split('/')[-1] + '_val', r['accuracy'])
-                                  for r in all_val_results if r['accuracy'] is not None])
+                entries.extend([
+                    (r['exp_name'].split('/')[-1] + '_val', r['accuracy'], r['exp_name'])
+                    for r in all_val_results if r['accuracy'] is not None
+                ])
 
-            if not all_results:
+            if not entries:
                 print("No experiment results to plot")
                 return
+
+            exp_labels = [e[0] for e in entries]
+            exp_accuracies = [e[1] for e in entries]
+            exp_fullnames = [e[2] for e in entries]
+
+            # Determine grouping key per entry
+            def group_key_from_exp(full_name: str) -> str:
+                if self.training_mode == 'combined':
+                    return 'combined'
+                if self.training_mode == 'concentration':
+                    if '3mM' in full_name:
+                        return '3mM'
+                    elif '6mM' in full_name:
+                        return '6mM'
+                    return 'unknown'
+                # per-experiment: group per experiment
+                return full_name
+
+            group_to_indices = {}
+            for idx, full in enumerate(exp_fullnames):
+                g = group_key_from_exp(full)
+                group_to_indices.setdefault(g, []).append(idx)
+
+            # Load per-group training (or CV) accuracy
+            group_to_acc = {}
+            for g in group_to_indices.keys():
+                meta_path = None
+                if self.training_mode == 'combined':
+                    meta_path = models_dir / 'enhanced_model_metadata.joblib'
+                elif self.training_mode == 'concentration':
+                    meta_path = models_dir / f'enhanced_model_metadata_{g}.joblib'
+                else:  # per-experiment
+                    safe = g.replace('/', '_').replace('\\', '_')
+                    meta_path = models_dir / f'enhanced_model_metadata_{safe}.joblib'
+
+                acc_value = None
+                if meta_path and meta_path.exists():
+                    try:
+                        md = joblib.load(meta_path)
+                        # Prefer training accuracy; if missing, use CV mean
+                        if md.get('training_accuracy') is not None:
+                            acc_value = float(md['training_accuracy'])
+                        elif md.get('cv_accuracy_mean') is not None:
+                            acc_value = float(md['cv_accuracy_mean'])
+                    except Exception:
+                        acc_value = None
+
+                # Reasonable default if not found
+                if acc_value is None:
+                    acc_value = 0.9
+                group_to_acc[g] = acc_value
 
             # Create the plot
             fig, ax = plt.subplots(figsize=(12, 8))
 
-            exp_names = [r[0] for r in all_results]
-            exp_accuracies = [r[1] for r in all_results]
+            # Bars
+            bars = ax.bar(range(len(exp_labels)), exp_accuracies, color='skyblue', alpha=0.7)
 
-            # Training accuracy line
-            ax.axhline(y=training_accuracy, color='red', linestyle='--', linewidth=2,
-                      label=f'Training Accuracy ({training_accuracy:.1%})')
-
-            # Experiment accuracies
-            bars = ax.bar(range(len(exp_names)), exp_accuracies, color='skyblue', alpha=0.7)
-
-            # Add value labels on bars
-            for i, (bar, acc) in enumerate(zip(bars, exp_accuracies)):
+            # Add value labels and color-code relative to each entry's group accuracy
+            for i, (bar, acc, full) in enumerate(zip(bars, exp_accuracies, exp_fullnames)):
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                       f'{acc:.1%}', ha='center', va='bottom', fontweight='bold')
-
-                # Color code based on performance vs training
-                if acc < training_accuracy - 0.1:  # More than 10% drop
+                        f'{acc:.1%}', ha='center', va='bottom', fontweight='bold')
+                g = group_key_from_exp(full)
+                target = group_to_acc.get(g, 0.9)
+                if acc < target - 0.1:
                     bar.set_color('lightcoral')
-                elif acc < training_accuracy - 0.05:  # 5-10% drop
+                elif acc < target - 0.05:
                     bar.set_color('orange')
-                else:  # Good performance
+                else:
                     bar.set_color('lightgreen')
 
+            # Draw per-group training/CV lines spanning the group's experiment indices
+            import itertools
+            colors = itertools.cycle(plt.rcParams['axes.prop_cycle'].by_key()['color'])
+            for g, idxs in group_to_indices.items():
+                if not idxs:
+                    continue
+                c = next(colors)
+                y = group_to_acc[g]
+                xmin = min(idxs) - 0.4
+                xmax = max(idxs) + 0.4
+                ax.hlines(y, xmin, xmax, colors=c, linestyles='--', linewidth=2,
+                          label=f"{g} Train Acc ({y:.1%})")
+
             ax.set_title(f'Training vs Individual Experiment Performance - {self.network_dir.upper()}',
-                        fontsize=14, fontweight='bold')
+                         fontsize=14, fontweight='bold')
             ax.set_ylabel('Accuracy')
             ax.set_xlabel('Experiment')
-            ax.set_xticks(range(len(exp_names)))
-            ax.set_xticklabels(exp_names, rotation=45, ha='right')
-            ax.set_ylim(0, min(1.1, max(max(exp_accuracies), training_accuracy) + 0.1))
+            ax.set_xticks(range(len(exp_labels)))
+            ax.set_xticklabels(exp_labels, rotation=45, ha='right')
+            max_ref = max(list(group_to_acc.values()) + exp_accuracies)
+            ax.set_ylim(0, min(1.1, max_ref + 0.1))
             ax.legend()
             ax.grid(True, alpha=0.3)
 
@@ -1761,12 +1819,22 @@ class AutoTrainingPipeline:
 
                     if enhanced_model_path.exists() and cluster_model_path.exists():
                         print(f"Loading concentration-specific enhanced model: {enhanced_model_path.name}")
+                        suffix = enhanced_model_path.stem.replace('enhanced_ensemble_model', '')
+                        scaler_path = self.models_dir / f"scaler{suffix}.joblib"
+                        selector_path = self.models_dir / f"feature_selector{suffix}.joblib"
+                        feature_names_path = self.models_dir / f"feature_names{suffix}.joblib"
+                        if not scaler_path.exists():
+                            scaler_path = self.models_dir / "latest_scaler.joblib"
+                        if not selector_path.exists():
+                            selector_path = self.models_dir / "latest_feature_selector.joblib"
+                        if not feature_names_path.exists():
+                            feature_names_path = self.models_dir / "latest_feature_names.joblib"
                         return {
                             'model': joblib.load(enhanced_model_path),
                             'cluster_model': joblib.load(cluster_model_path),
-                            'scaler': joblib.load(self.models_dir / "latest_scaler.joblib"),
-                            'selector': joblib.load(self.models_dir / "latest_feature_selector.joblib"),
-                            'feature_names': joblib.load(self.models_dir / "latest_feature_names.joblib"),
+                            'scaler': joblib.load(scaler_path),
+                            'selector': joblib.load(selector_path),
+                            'feature_names': joblib.load(feature_names_path),
                             'model_type': 'enhanced'
                         }
 
@@ -1795,12 +1863,22 @@ class AutoTrainingPipeline:
             # If enhanced models exist in current dir
             if enhanced_model_path.exists() and cluster_model_path.exists():
                 print("Loading enhanced ensemble models...")
+                suffix = enhanced_model_path.stem.replace('enhanced_ensemble_model', '') if 'enhanced_ensemble_model' in enhanced_model_path.name else ""
+                scaler_path = self.models_dir / f"scaler{suffix}.joblib" if suffix else self.models_dir / "latest_scaler.joblib"
+                selector_path = self.models_dir / f"feature_selector{suffix}.joblib" if suffix else self.models_dir / "latest_feature_selector.joblib"
+                feature_names_path = self.models_dir / f"feature_names{suffix}.joblib" if suffix else self.models_dir / "latest_feature_names.joblib"
+                if not scaler_path.exists():
+                    scaler_path = self.models_dir / "latest_scaler.joblib"
+                if not selector_path.exists():
+                    selector_path = self.models_dir / "latest_feature_selector.joblib"
+                if not feature_names_path.exists():
+                    feature_names_path = self.models_dir / "latest_feature_names.joblib"
                 return {
                     'model': joblib.load(enhanced_model_path),
                     'cluster_model': joblib.load(cluster_model_path),
-                    'scaler': joblib.load(self.models_dir / "latest_scaler.joblib"),
-                    'selector': joblib.load(self.models_dir / "latest_feature_selector.joblib"),
-                    'feature_names': joblib.load(self.models_dir / "latest_feature_names.joblib"),
+                    'scaler': joblib.load(scaler_path),
+                    'selector': joblib.load(selector_path),
+                    'feature_names': joblib.load(feature_names_path),
                     'model_type': 'enhanced'
                 }
             else:
@@ -1843,12 +1921,23 @@ class AutoTrainingPipeline:
 
             if enhanced_model_path.exists() and cluster_model_path.exists():
                 print(f"Loading per-experiment model for {exp_name} (group: {group_key})")
+                # Prefer group-specific preprocessing artifacts; fallback to 'latest'
+                scaler_path = self.models_dir / f"scaler{model_suffix}.joblib"
+                selector_path = self.models_dir / f"feature_selector{model_suffix}.joblib"
+                feature_names_path = self.models_dir / f"feature_names{model_suffix}.joblib"
+                if not scaler_path.exists():
+                    scaler_path = self.models_dir / "latest_scaler.joblib"
+                if not selector_path.exists():
+                    selector_path = self.models_dir / "latest_feature_selector.joblib"
+                if not feature_names_path.exists():
+                    feature_names_path = self.models_dir / "latest_feature_names.joblib"
+
                 return {
                     'model': joblib.load(enhanced_model_path),
                     'cluster_model': joblib.load(cluster_model_path),
-                    'scaler': joblib.load(self.models_dir / "latest_scaler.joblib"),
-                    'selector': joblib.load(self.models_dir / "latest_feature_selector.joblib"),
-                    'feature_names': joblib.load(self.models_dir / "latest_feature_names.joblib"),
+                    'scaler': joblib.load(scaler_path),
+                    'selector': joblib.load(selector_path),
+                    'feature_names': joblib.load(feature_names_path),
                     'model_type': 'enhanced',
                     'experiment_specific': True,
                     'group_name': group_key

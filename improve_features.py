@@ -6,6 +6,7 @@ Feature engineering improvements based on error analysis.
 import pandas as pd
 import numpy as np
 import joblib
+import os
 from pathlib import Path
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectKBest, f_classif
@@ -63,16 +64,19 @@ def create_improved_features(df):
 def load_and_improve_training_data():
     """Load training data and apply feature improvements."""
     print("[LOAD] Loading training data...")
-    
-    # Load training files
-    train_files = ["training_data/train3.xlsx", "training_data/train6.xlsx"]
-    dataframes = []
-    
-    for file_path in train_files:
-        df = pd.read_excel(file_path)
-        dataframes.append(df)
-    
-    train_df = pd.concat(dataframes, ignore_index=True)
+
+    # Prefer single combined training input if provided via environment
+    combined_train_path = os.environ.get('AUTORUN_TRAIN_INPUT')
+    if combined_train_path and Path(combined_train_path).exists():
+        train_df = pd.read_excel(combined_train_path, engine='openpyxl')
+    else:
+        # Backward-compatibility: load legacy split files
+        train_files = ["training_data/train3.xlsx", "training_data/train6.xlsx"]
+        dataframes = []
+        for file_path in train_files:
+            df = pd.read_excel(file_path, engine='openpyxl')
+            dataframes.append(df)
+        train_df = pd.concat(dataframes, ignore_index=True)
     print(f"✓ Loaded training data: {train_df.shape}")
     
     # Apply improvements
@@ -84,10 +88,19 @@ def load_and_improve_test_data():
     """Load test data and apply feature improvements."""
     print("[LOAD] Loading test data...")
     
-    # Load test files from data_for_classification folder
-    val3 = pd.read_excel('data_for_classification/val3.xlsx')
-    val6 = pd.read_excel('data_for_classification/val6.xlsx')
-    test_df = pd.concat([val3, val6], ignore_index=True)
+    # Prefer explicit test input path if provided
+    explicit_test_path = os.environ.get('AUTORUN_TEST_INPUT')
+    if explicit_test_path and Path(explicit_test_path).exists():
+        test_df = pd.read_excel(explicit_test_path, engine='openpyxl')
+        print(f"✓ Loading explicit balanced test data: {explicit_test_path}")
+    else:
+        # Load network-specific balanced test data
+        network_dir = os.environ.get('AUTORUN_NETWORK_DIR', 'first_network')
+        balanced_test_path = f'{network_dir}_test_data_improved.xlsx'
+        if not Path(balanced_test_path).exists():
+            raise FileNotFoundError(f"Network-specific test data not found: {balanced_test_path}")
+        print(f"✓ Loading network-specific balanced test data: {balanced_test_path}")
+        test_df = pd.read_excel(balanced_test_path, engine='openpyxl')
     
     print(f"✓ Loaded test data: {test_df.shape}")
     
@@ -162,7 +175,8 @@ def create_feature_importance_comparison():
     print(f"\n[ANALYSIS] Creating feature importance comparison...")
     
     # Load original model for comparison
-    models_dir = Path("models")
+    import os
+    models_dir = Path(os.environ.get('AUTORUN_MODELS_DIR', 'models'))
     if models_dir.exists():
         try:
             original_feature_names = joblib.load(models_dir / "latest_feature_names.joblib")
@@ -240,13 +254,17 @@ def main():
         # Provide recommendations
         suggest_model_improvements()
         
-        # Save improved datasets
-        train_improved.to_excel('training_data/train_improved.xlsx', index=False)
-        test_improved.to_excel('test_data_improved.xlsx', index=False)
+        # Save improved datasets (prefer explicit output paths)
+        train_out = os.environ.get('AUTORUN_TRAIN_OUT', 'training_data/train_improved.xlsx')
+        test_out = os.environ.get('AUTORUN_TEST_OUT', 'test_data_improved.xlsx')
+        Path(train_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(test_out).parent.mkdir(parents=True, exist_ok=True)
+        train_improved.to_excel(train_out, index=False)
+        test_improved.to_excel(test_out, index=False)
         
         print(f"\n[SUCCESS] Feature engineering complete!")
-        print(f"✓ Saved improved training data: training_data/train_improved.xlsx")
-        print(f"✓ Saved improved test data: test_data_improved.xlsx")
+        print(f"✓ Saved improved training data: {train_out}")
+        print(f"✓ Saved improved test data: {test_out}")
         
         print(f"\n[NEXT] NEXT STEPS:")
         print(f"1. Run: python excel_xgboost_classifier.py --files training_data/train_improved.xlsx --max-features 25")

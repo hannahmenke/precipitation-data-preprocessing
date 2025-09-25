@@ -103,7 +103,8 @@ def load_train_test_results():
     print("📈 Loading training and test performance...")
     
     # Try to load the latest model metadata and training results
-    models_dir = Path("models")
+    import os
+    models_dir = Path(os.environ.get('AUTORUN_MODELS_DIR', 'models'))
     
     try:
         # Load model to get training history if available

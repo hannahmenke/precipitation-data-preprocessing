@@ -852,6 +852,7 @@ def main(output_dir="models"):
 if __name__ == "__main__":
     import sys
 
-    # Allow specifying output directory as command line argument
-    output_dir = sys.argv[1] if len(sys.argv) > 1 else "models"
+    # Allow specifying output directory as command line argument or environment variable
+    import os
+    output_dir = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('AUTORUN_MODELS_DIR', 'models')
     main(output_dir) 
